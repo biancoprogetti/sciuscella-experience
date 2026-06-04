@@ -1,0 +1,791 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TYPESET</title>
+  <style>
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; }
+
+    body {
+      background: #0a0a0a;
+      overflow: hidden;
+      font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    canvas {
+      display: block;
+      position: fixed;
+      left: 50%; top: 50%;
+      transform: translate(-50%, -50%);
+      box-shadow: 0 0 0 1px rgba(255,255,255,0.06);
+    }
+
+    body.hide-ui #panel,
+    body.hide-ui #read { display: none; }
+
+    /* ── Liquid glass panel ─────────────────────────────────────────── */
+
+    #panel {
+      position: fixed;
+      top: 18px; left: 18px;
+      width: 280px;
+      background: rgba(18, 18, 20, 0.45);
+      backdrop-filter: blur(32px) saturate(180%);
+      -webkit-backdrop-filter: blur(32px) saturate(180%);
+      color: rgba(255, 255, 255, 0.92);
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      border-radius: 22px;
+      box-shadow:
+        0 20px 50px rgba(0, 0, 0, 0.55),
+        inset 0 1px 0 rgba(255, 255, 255, 0.12);
+      z-index: 100;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+
+    #panel header {
+      padding: 16px 18px 14px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+    }
+    #panel header h1 {
+      font-size: 12px;
+      font-weight: 500;
+      letter-spacing: 0.32em;
+      text-transform: uppercase;
+      color: rgba(255, 255, 255, 0.96);
+    }
+    #panel header small {
+      font-size: 9px;
+      font-weight: 400;
+      letter-spacing: 0.22em;
+      color: rgba(255, 255, 255, 0.45);
+    }
+
+    .text-block {
+      padding: 14px 18px 14px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .text-block label {
+      display: block;
+      font-size: 9px;
+      font-weight: 600;
+      letter-spacing: 0.24em;
+      text-transform: uppercase;
+      margin-bottom: 8px;
+      color: rgba(255, 255, 255, 0.5);
+    }
+    .text-block textarea {
+      width: 100%;
+      min-height: 76px;
+      background: transparent;
+      color: rgba(255, 255, 255, 0.95);
+      border: none;
+      padding: 0;
+      font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+      font-size: 17px;
+      font-weight: 400;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+      line-height: 1.18;
+      resize: none;
+      outline: none;
+      caret-color: #00AAEE;
+    }
+    .text-block textarea::placeholder { color: rgba(255, 255, 255, 0.22); }
+    .text-block .hint {
+      margin-top: 10px;
+      font-size: 8px;
+      letter-spacing: 0.22em;
+      text-transform: uppercase;
+      color: rgba(255, 255, 255, 0.32);
+    }
+
+    .controls { padding: 14px 18px 8px; }
+
+    .row { margin-bottom: 12px; }
+    .row .lbl {
+      display: flex;
+      justify-content: space-between;
+      font-size: 9px;
+      letter-spacing: 0.22em;
+      text-transform: uppercase;
+      font-weight: 600;
+      color: rgba(255, 255, 255, 0.55);
+      margin-bottom: 6px;
+    }
+    .row .lbl .val {
+      font-weight: 400;
+      color: rgba(255, 255, 255, 0.88);
+      font-variant-numeric: tabular-nums;
+    }
+
+    input[type=range] {
+      -webkit-appearance: none;
+      width: 100%;
+      height: 16px;
+      background: transparent;
+      cursor: ew-resize;
+    }
+    input[type=range]::-webkit-slider-runnable-track {
+      height: 2px;
+      background: rgba(255, 255, 255, 0.18);
+      border-radius: 1px;
+    }
+    input[type=range]::-moz-range-track {
+      height: 2px;
+      background: rgba(255, 255, 255, 0.18);
+      border-radius: 1px;
+    }
+    input[type=range]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 14px;
+      height: 14px;
+      background: rgba(255, 255, 255, 0.95);
+      border: none;
+      border-radius: 50%;
+      margin-top: -6px;
+      cursor: ew-resize;
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+    }
+    input[type=range]::-moz-range-thumb {
+      width: 14px;
+      height: 14px;
+      background: rgba(255, 255, 255, 0.95);
+      border: none;
+      border-radius: 50%;
+      cursor: ew-resize;
+      box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+    }
+
+    .palette-strip {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      height: 24px;
+      margin-top: 6px;
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .palette-strip .swatch {
+      cursor: pointer;
+      border-right: 1px solid rgba(255, 255, 255, 0.1);
+      position: relative;
+    }
+    .palette-strip .swatch:last-child { border-right: none; }
+    .palette-strip .swatch.active::after {
+      content: "";
+      position: absolute;
+      inset: 3px;
+      border: 1.5px solid rgba(255, 255, 255, 0.95);
+      border-radius: 3px;
+      pointer-events: none;
+    }
+
+    .format-tabs {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      margin-top: 6px;
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      border-radius: 10px;
+      overflow: hidden;
+    }
+    .format-tabs button {
+      background: transparent;
+      color: rgba(255, 255, 255, 0.55);
+      border: none;
+      border-right: 1px solid rgba(255, 255, 255, 0.1);
+      padding: 9px 2px;
+      font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+      font-size: 9px;
+      font-weight: 600;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+    }
+    .format-tabs button:last-child { border-right: none; }
+    .format-tabs button:hover { color: rgba(255, 255, 255, 0.9); }
+    .format-tabs button.active {
+      background: rgba(255, 255, 255, 0.15);
+      color: #fff;
+    }
+
+    .buttons {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .buttons button {
+      background: transparent;
+      color: rgba(255, 255, 255, 0.7);
+      border: none;
+      border-right: 1px solid rgba(255, 255, 255, 0.08);
+      padding: 14px 4px;
+      font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      cursor: pointer;
+      transition: background 0.15s, color 0.15s;
+    }
+    .buttons button:last-child { border-right: none; }
+    .buttons button:hover {
+      background: rgba(255, 255, 255, 0.06);
+      color: #fff;
+    }
+    .buttons button.active {
+      background: rgba(255, 255, 255, 0.14);
+      color: #fff;
+    }
+
+    #show-ui {
+      position: fixed;
+      top: 18px;
+      left: 18px;
+      z-index: 200;
+      background: rgba(18, 18, 20, 0.5);
+      backdrop-filter: blur(32px) saturate(180%);
+      -webkit-backdrop-filter: blur(32px) saturate(180%);
+      color: rgba(255, 255, 255, 0.92);
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      border-radius: 14px;
+      padding: 10px 16px;
+      font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.22em;
+      text-transform: uppercase;
+      cursor: pointer;
+      display: none;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+    }
+    body.hide-ui #show-ui { display: block; }
+
+    #read {
+      position: fixed;
+      right: 18px;
+      bottom: 18px;
+      color: rgba(255, 255, 255, 0.6);
+      mix-blend-mode: difference;
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.24em;
+      text-transform: uppercase;
+      pointer-events: none;
+      z-index: 50;
+      line-height: 1.6;
+      text-align: right;
+    }
+  </style>
+</head>
+<body>
+
+<canvas id="c"></canvas>
+
+<div id="read">
+  <div id="r-frame">FRAME 000000</div>
+  <div id="r-bands">— BANDS</div>
+</div>
+
+<div id="panel">
+  <header>
+    <h1>TYPESET</h1>
+    <small>10 FPS</small>
+  </header>
+
+  <div class="text-block">
+    <label for="user-text">Your text</label>
+    <textarea id="user-text" placeholder="type here" spellcheck="false">NOTHING
+MORE
+TO
+SAY</textarea>
+    <div class="hint">comma or newline = new entry</div>
+  </div>
+
+  <div class="controls">
+    <div class="row">
+      <div class="lbl"><span>FPS</span><span class="val" id="v-fps">10</span></div>
+      <input type="range" id="s-fps" min="2" max="10" value="10">
+    </div>
+
+    <div class="row">
+      <div class="lbl"><span>Bands</span><span class="val" id="v-ban">5</span></div>
+      <input type="range" id="s-ban" min="2" max="12" value="5">
+    </div>
+
+    <div class="row">
+      <div class="lbl"><span>Force</span><span class="val" id="v-for">100</span></div>
+      <input type="range" id="s-for" min="40" max="180" value="100">
+    </div>
+
+    <div class="row">
+      <div class="lbl"><span>Chaos</span><span class="val" id="v-cha">35</span></div>
+      <input type="range" id="s-cha" min="0" max="100" value="35">
+    </div>
+
+    <div class="row">
+      <div class="lbl"><span>Palette</span><span class="val" id="v-pal">03 / 04</span></div>
+      <div class="palette-strip" id="palette-strip"></div>
+    </div>
+
+    <div class="row">
+      <div class="lbl"><span>Format</span><span class="val" id="v-fmt">FULL</span></div>
+      <div class="format-tabs" id="format-tabs">
+        <button data-fmt="full" class="active">FULL</button>
+        <button data-fmt="9:16">9:16</button>
+        <button data-fmt="16:9">16:9</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="buttons">
+    <button id="btn-pause">PAUSE</button>
+    <button id="btn-shuffle">SHUFFLE</button>
+    <button id="btn-png">PNG</button>
+    <button id="btn-hide">HIDE</button>
+  </div>
+</div>
+
+<button id="show-ui">SHOW</button>
+
+<script>
+(function () {
+  'use strict';
+
+  const canvas = document.getElementById('c');
+  const ctx    = canvas.getContext('2d');
+
+  let W, H;
+  let format = 'full';
+
+  function resize() {
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    let cw, ch;
+    if (format === 'full') {
+      cw = vw; ch = vh;
+    } else {
+      const ratio = format === '9:16' ? 9 / 16 : 16 / 9;
+      if (vw / vh > ratio) { ch = vh; cw = Math.floor(ch * ratio); }
+      else                  { cw = vw; ch = Math.floor(cw / ratio); }
+    }
+    W = cw; H = ch;
+    canvas.width = W; canvas.height = H;
+    render();
+  }
+  window.addEventListener('resize', resize);
+
+  // ── 2-color palettes — danielbianco.net ───────────────────────────────
+
+  const PALETTES = [
+    ['#FFFFFF', '#000000'],   // 01 bianco / nero
+    ['#000000', '#FFFFFF'],   // 02 nero / bianco
+    ['#E8E8E6', '#00AAEE'],   // 03 sito  (bg / ink)
+    ['#00AAEE', '#E8E8E6']    // 04 sito invertita
+  ];
+
+  let palIdx = 2;
+
+  // ── State ─────────────────────────────────────────────────────────────
+
+  const state = {
+    fps: 10,
+    bands: 5,
+    force: 100,
+    chaos: 35,
+    paused: false
+  };
+
+  let frame = 0;
+  let tickHandle = null;
+  let WORDS = ['TYPESET'];
+
+  // Helvetica — light (300) on hero-scale, regular (400) on small
+  const FONT = '"Helvetica Neue", Helvetica, Arial, sans-serif';
+  function setFont(size) {
+    const weight = size >= Math.max(80, H * 0.1) ? '300' : '400';
+    ctx.font = weight + ' ' + size + 'px ' + FONT;
+  }
+
+  function rng(seed) {
+    let s = (seed | 0) || 1;
+    return function () {
+      s = (s * 1664525 + 1013904223) | 0;
+      return ((s >>> 0) % 1e6) / 1e6;
+    };
+  }
+  function pick(r, arr) { return arr[Math.floor(r() * arr.length)]; }
+
+  // ── Band generation ───────────────────────────────────────────────────
+
+  const BAND_KINDS = ['hero', 'hero', 'ticker', 'ticker', 'grid', 'vertical', 'stripe'];
+
+  function generateScene() {
+    const r = rng(frame * 1234 + palIdx * 71 + state.bands * 17);
+    const chaos = state.chaos / 100;
+
+    const n = Math.max(2, Math.min(14, state.bands + Math.floor(r() * 4 * chaos)));
+
+    const weights = [];
+    for (let i = 0; i < n; i++) {
+      let w = 0.4 + r() * 1.2;
+      if (r() < 0.18) w *= 2.5 + r() * 3;        // hero band
+      weights.push(w);
+    }
+    const sum = weights.reduce((a, b) => a + b, 0);
+
+    const bands = [];
+    let y = 0;
+    for (let i = 0; i < n; i++) {
+      const h = (weights[i] / sum) * H;
+
+      let kind;
+      if (h > H * 0.35)      kind = 'hero';
+      else if (h > H * 0.18) kind = r() < 0.6 ? 'hero' : pick(r, ['ticker','grid']);
+      else if (h < 20)       kind = 'stripe';
+      else                   kind = pick(r, BAND_KINDS);
+
+      const invert = r() < (0.22 + chaos * 0.45);
+
+      bands.push({
+        y, h, kind, invert,
+        word: WORDS[(frame + i * 3) % WORDS.length],
+        seed: r() * 1e6
+      });
+      y += h;
+    }
+    return bands;
+  }
+
+  // ── Per-band drawing ──────────────────────────────────────────────────
+
+  function drawBand(band, pal) {
+    const bg = band.invert ? pal[1] : pal[0];
+    const fg = band.invert ? pal[0] : pal[1];
+
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, band.y, W, band.h);
+
+    if (band.kind === 'stripe') return;
+    if (!band.word) return;
+
+    ctx.fillStyle = fg;
+    ctx.textBaseline = 'middle';
+
+    switch (band.kind) {
+      case 'hero':     drawHero(band, fg);     break;
+      case 'ticker':   drawTicker(band, fg);   break;
+      case 'grid':     drawGrid(band, fg);     break;
+      case 'vertical': drawVertical(band, fg); break;
+    }
+  }
+
+
+  // HERO — word forced to overfill the band so it gets clipped top/bottom
+  function drawHero(band, fg) {
+    const r = rng(band.seed);
+    const word = band.word;
+    const forceF = state.force / 100;
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, band.y, W, band.h);
+    ctx.clip();
+
+    const overflow = 1.05 + forceF * 0.55 + r() * 0.4;   // 1.05 – 2.0
+    let fs = band.h * overflow / 0.72;
+    setFont(fs);
+
+    let ls = '0em';
+    const lsRoll = r();
+    if      (lsRoll < 0.12) ls = '-0.04em';
+    else if (lsRoll < 0.78) ls = '0em';
+    else if (lsRoll < 0.92) ls = '0.18em';
+    else                    ls = '0.45em';
+    if ('letterSpacing' in ctx) ctx.letterSpacing = ls;
+
+    const targetW = W * (0.85 + r() * 0.35);
+    const measured = ctx.measureText(word).width;
+    if (measured > 0) fs *= targetW / measured;
+    setFont(fs);
+    if ('letterSpacing' in ctx) ctx.letterSpacing = ls;
+
+    const align = pick(r, ['left','center','center','right']);
+    ctx.textAlign = align;
+    let cx;
+    if      (align === 'left')   cx = W * 0.02;
+    else if (align === 'right')  cx = W * 0.98;
+    else                         cx = W * 0.5;
+
+    const cy = band.y + band.h * (0.5 + (r() - 0.5) * 0.12 * (state.chaos / 100));
+
+    ctx.fillStyle = fg;
+    ctx.fillText(word, cx, cy);
+
+    if ('letterSpacing' in ctx) ctx.letterSpacing = '0px';
+    ctx.restore();
+  }
+
+  // TICKER — word repeated horizontally, slight scroll offset per frame
+  function drawTicker(band, fg) {
+    const r = rng(band.seed);
+    const forceF = state.force / 100;
+
+    const fs = band.h * (0.6 + r() * 0.3) * (0.7 + forceF * 0.6);
+    setFont(fs);
+
+    const ls = pick(r, ['0em','0.1em','0.25em']);
+    if ('letterSpacing' in ctx) ctx.letterSpacing = ls;
+
+    const sep = '   ·   ';
+    const txt = band.word + sep;
+    const ww = ctx.measureText(txt).width;
+    if (ww < 4) return;
+
+    const offset = -((frame * (3 + r() * 6)) % ww);
+    ctx.textAlign = 'left';
+    ctx.fillStyle = fg;
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, band.y, W, band.h);
+    ctx.clip();
+
+    for (let x = offset; x < W + ww; x += ww) {
+      ctx.fillText(txt, x, band.y + band.h * 0.55);
+    }
+    ctx.restore();
+
+    if ('letterSpacing' in ctx) ctx.letterSpacing = '0px';
+  }
+
+  // GRID — word tiled as small pattern
+  function drawGrid(band, fg) {
+    const r = rng(band.seed);
+    const lineH = Math.max(10, band.h / (3 + Math.floor(r() * 4)));
+    const fs = lineH * 0.82;
+    setFont(fs);
+    const txt = band.word + ' ';
+    const ww = ctx.measureText(txt).width;
+    if (ww < 4) return;
+
+    ctx.fillStyle = fg;
+    ctx.textBaseline = 'middle';
+    ctx.textAlign = 'left';
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, band.y, W, band.h);
+    ctx.clip();
+
+    const rows = Math.ceil(band.h / lineH);
+    for (let row = 0; row < rows; row++) {
+      const ty = band.y + lineH * (row + 0.5);
+      const off = (row % 2 ? -ww * 0.5 : 0) +
+                  (((frame * (row + 1)) % Math.max(1, ww * 0.2)) * (r() > 0.5 ? 1 : -1));
+      for (let x = off; x < W + ww; x += ww) {
+        ctx.fillText(txt, x, ty);
+      }
+    }
+    ctx.restore();
+  }
+
+  // VERTICAL — letters stacked, multiple columns, each shifted
+  function drawVertical(band, fg) {
+    const r = rng(band.seed);
+    const word = band.word;
+    if (!word) return;
+
+    const ncols = 2 + Math.floor(r() * 6);
+    const colW = W / ncols;
+    const letterH = band.h / word.length;
+    const fs = Math.min(letterH * 0.9, colW * 0.78);
+    if (fs < 5) return;
+
+    setFont(fs);
+    ctx.fillStyle = fg;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(0, band.y, W, band.h);
+    ctx.clip();
+
+    for (let c = 0; c < ncols; c++) {
+      const shift = (c + frame) % word.length;
+      for (let i = 0; i < word.length; i++) {
+        const ch = word[(i + shift) % word.length];
+        ctx.fillText(ch, colW * (c + 0.5), band.y + letterH * (i + 0.5));
+      }
+    }
+    ctx.restore();
+  }
+
+  // ── Render ────────────────────────────────────────────────────────────
+
+  function render() {
+    const pal = PALETTES[palIdx];
+    if (!WORDS.length) {
+      ctx.fillStyle = pal[0];
+      ctx.fillRect(0, 0, W, H);
+      updateReadout(0);
+      return;
+    }
+
+    ctx.fillStyle = pal[0];
+    ctx.fillRect(0, 0, W, H);
+
+    const bands = generateScene();
+    for (const b of bands) drawBand(b, pal);
+
+    // Hairline edges
+    ctx.fillStyle = pal[1];
+    ctx.fillRect(0, 0, W, 1);
+    ctx.fillRect(0, H - 1, W, 1);
+
+    updateReadout(bands.length);
+  }
+
+  function updateReadout(n) {
+    document.getElementById('r-frame').textContent =
+      'FRAME ' + String(frame).padStart(6, '0') + ' · ' + W + '×' + H;
+    document.getElementById('r-bands').textContent =
+      n + ' BANDS · ' + WORDS.length + ' ENTRIES';
+  }
+
+  // ── Tick ──────────────────────────────────────────────────────────────
+
+  function tick() {
+    if (state.paused) return;
+    frame++;
+    render();
+  }
+  function startTick() {
+    if (tickHandle) clearInterval(tickHandle);
+    tickHandle = setInterval(tick, 1000 / state.fps);
+  }
+
+  // ── Sliders ───────────────────────────────────────────────────────────
+
+  function wire(id, key, after) {
+    const el = document.getElementById('s-' + id);
+    const v  = document.getElementById('v-' + id);
+    el.addEventListener('input', () => {
+      state[key] = +el.value;
+      v.textContent = state[key];
+      if (after) after();
+      render();
+    });
+  }
+  wire('fps', 'fps', () => startTick());
+  wire('ban', 'bands');
+  wire('for', 'force');
+  wire('cha', 'chaos');
+
+  // ── Palette strip ─────────────────────────────────────────────────────
+
+  const strip = document.getElementById('palette-strip');
+  PALETTES.forEach((pal, i) => {
+    const sw = document.createElement('div');
+    sw.className = 'swatch' + (i === palIdx ? ' active' : '');
+    sw.style.background = 'linear-gradient(135deg, ' + pal[0] + ' 50%, ' + pal[1] + ' 50%)';
+    sw.addEventListener('click', () => {
+      palIdx = i;
+      [...strip.children].forEach((c, j) => c.classList.toggle('active', j === i));
+      document.getElementById('v-pal').textContent =
+        String(i + 1).padStart(2, '0') + ' / ' + String(PALETTES.length).padStart(2, '0');
+      render();
+    });
+    strip.appendChild(sw);
+  });
+  document.getElementById('v-pal').textContent =
+    String(palIdx + 1).padStart(2, '0') + ' / ' + String(PALETTES.length).padStart(2, '0');
+
+  // ── User text ─────────────────────────────────────────────────────────
+
+  const userText = document.getElementById('user-text');
+  function refreshWords() {
+    WORDS = userText.value
+      .split(/[,\n]+/)
+      .map(s => s.trim().toUpperCase())
+      .filter(Boolean);
+    render();
+  }
+  userText.addEventListener('input', refreshWords);
+  userText.addEventListener('keydown', e => e.stopPropagation());
+  refreshWords();
+
+  // ── Buttons ───────────────────────────────────────────────────────────
+
+  const btnPause = document.getElementById('btn-pause');
+  btnPause.addEventListener('click', () => {
+    state.paused = !state.paused;
+    btnPause.textContent = state.paused ? 'PLAY' : 'PAUSE';
+    btnPause.classList.toggle('active', state.paused);
+  });
+
+  document.getElementById('btn-shuffle').addEventListener('click', () => {
+    frame += 100 + Math.floor(Math.random() * 9000);
+    palIdx = Math.floor(Math.random() * PALETTES.length);
+    [...strip.children].forEach((c, j) => c.classList.toggle('active', j === palIdx));
+    document.getElementById('v-pal').textContent =
+      String(palIdx + 1).padStart(2, '0') + ' / ' + String(PALETTES.length).padStart(2, '0');
+    render();
+  });
+
+  document.getElementById('btn-png').addEventListener('click', () => {
+    const a = document.createElement('a');
+    a.download = 'typeset-' + String(frame).padStart(6, '0') + '.png';
+    a.href = canvas.toDataURL('image/png');
+    a.click();
+  });
+
+  // ── Format selector ───────────────────────────────────────────────────
+
+  const fmtTabs = document.getElementById('format-tabs');
+  fmtTabs.addEventListener('click', e => {
+    const btn = e.target.closest('button');
+    if (!btn) return;
+    [...fmtTabs.children].forEach(c => c.classList.toggle('active', c === btn));
+    format = btn.dataset.fmt;
+    document.getElementById('v-fmt').textContent = format.toUpperCase();
+    resize();
+  });
+
+  // ── Hide / show UI ────────────────────────────────────────────────────
+
+  function setHidden(hidden) {
+    document.body.classList.toggle('hide-ui', hidden);
+  }
+  document.getElementById('btn-hide').addEventListener('click', () => setHidden(true));
+  document.getElementById('show-ui').addEventListener('click', () => setHidden(false));
+
+  // ── Keyboard ──────────────────────────────────────────────────────────
+
+  document.addEventListener('keydown', e => {
+    if (document.activeElement === userText) return;
+    if (e.key === ' ')                       { btnPause.click(); e.preventDefault(); }
+    else if (e.key === 's' || e.key === 'S') document.getElementById('btn-shuffle').click();
+    else if (e.key === 'p' || e.key === 'P') document.getElementById('btn-png').click();
+    else if (e.key === 'h' || e.key === 'H') setHidden(!document.body.classList.contains('hide-ui'));
+  });
+
+  // ── Boot ──────────────────────────────────────────────────────────────
+
+  resize();
+  startTick();
+  render();
+
+})();
+</script>
+</body>
+</html>

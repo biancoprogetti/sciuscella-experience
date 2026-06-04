@@ -1,0 +1,691 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MISTAKER</title>
+  <style>
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+    html, body { width: 100%; height: 100%; }
+
+    body {
+      background: #000;
+      overflow: hidden;
+      font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    canvas { display: block; image-rendering: pixelated; }
+
+    /* ── Side panel ─────────────────────────────────────────────────────── */
+
+    #panel {
+      position: fixed;
+      top: 18px;
+      right: 18px;
+      width: 260px;
+      background: #fff;
+      color: #000;
+      padding: 18px 16px 14px;
+      z-index: 100;
+      border: 1px solid #000;
+      box-shadow: 6px 6px 0 #000;
+    }
+
+    #panel h1 {
+      font-size: 11px;
+      font-weight: 700;
+      letter-spacing: 0.32em;
+      text-transform: uppercase;
+      border-bottom: 1px solid #000;
+      padding-bottom: 10px;
+      margin-bottom: 14px;
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+    }
+    #panel h1 small {
+      font-weight: 400;
+      font-size: 9px;
+      letter-spacing: 0.2em;
+    }
+
+    .row {
+      margin-bottom: 11px;
+    }
+    .row .lbl {
+      display: flex;
+      justify-content: space-between;
+      font-size: 9px;
+      letter-spacing: 0.22em;
+      text-transform: uppercase;
+      margin-bottom: 4px;
+      font-weight: 700;
+    }
+    .row .lbl .val {
+      font-weight: 400;
+      font-variant-numeric: tabular-nums;
+    }
+
+    input[type=range] {
+      -webkit-appearance: none;
+      width: 100%;
+      height: 14px;
+      background: transparent;
+      cursor: ew-resize;
+      margin: 0;
+      padding: 0;
+    }
+    input[type=range]::-webkit-slider-runnable-track {
+      height: 2px;
+      background: #000;
+      border: none;
+    }
+    input[type=range]::-moz-range-track {
+      height: 2px;
+      background: #000;
+      border: none;
+    }
+    input[type=range]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 14px;
+      height: 14px;
+      background: #000;
+      border: none;
+      border-radius: 0;
+      margin-top: -6px;
+      cursor: ew-resize;
+    }
+    input[type=range]::-moz-range-thumb {
+      width: 14px;
+      height: 14px;
+      background: #000;
+      border: none;
+      border-radius: 0;
+      cursor: ew-resize;
+    }
+
+    .text-row {
+      margin-top: 14px;
+      padding-top: 12px;
+      border-top: 1px solid #000;
+    }
+    .text-row .lbl {
+      display: flex;
+      justify-content: space-between;
+      font-size: 9px;
+      letter-spacing: 0.22em;
+      text-transform: uppercase;
+      margin-bottom: 6px;
+      font-weight: 700;
+    }
+    .text-row textarea {
+      width: 100%;
+      height: 54px;
+      background: #fff;
+      color: #000;
+      border: 1px solid #000;
+      padding: 6px 7px;
+      font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+      font-size: 11px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      resize: none;
+      outline: none;
+      line-height: 1.35;
+    }
+    .text-row textarea:focus { background: #FFE600; }
+    .text-row .hint {
+      margin-top: 4px;
+      font-size: 8px;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: #666;
+      font-weight: 400;
+    }
+
+    .buttons {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 6px;
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid #000;
+    }
+    .buttons button {
+      background: #fff;
+      color: #000;
+      border: 1px solid #000;
+      padding: 8px 4px;
+      font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+      font-size: 9px;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      font-weight: 700;
+      cursor: pointer;
+    }
+    .buttons button:hover,
+    .buttons button.active {
+      background: #000;
+      color: #fff;
+    }
+
+    .palette-strip {
+      display: grid;
+      grid-template-columns: repeat(8, 1fr);
+      gap: 0;
+      height: 18px;
+      margin-top: 6px;
+      border: 1px solid #000;
+    }
+    .palette-strip .swatch {
+      cursor: pointer;
+      border-right: 1px solid #000;
+    }
+    .palette-strip .swatch:last-child { border-right: none; }
+    .palette-strip .swatch.active {
+      box-shadow: inset 0 0 0 2px #000, inset 0 0 0 4px #fff;
+    }
+
+    /* corner readouts on the canvas */
+    #readout {
+      position: fixed;
+      bottom: 14px;
+      left: 16px;
+      color: #fff;
+      mix-blend-mode: difference;
+      font-size: 10px;
+      letter-spacing: 0.24em;
+      text-transform: uppercase;
+      font-weight: 700;
+      pointer-events: none;
+      z-index: 50;
+      line-height: 1.6;
+    }
+  </style>
+</head>
+<body>
+
+<canvas id="c"></canvas>
+
+<div id="readout">
+  <div id="r-frame">FRAME 000000</div>
+  <div id="r-word">—</div>
+</div>
+
+<div id="panel">
+  <h1>MISTAKER <small>v.01</small></h1>
+
+  <div class="row">
+    <div class="lbl"><span>FPS</span><span class="val" id="v-fps">10</span></div>
+    <input type="range" id="s-fps" min="2" max="30" value="10">
+  </div>
+
+  <div class="row">
+    <div class="lbl"><span>Densità</span><span class="val" id="v-den">10</span></div>
+    <input type="range" id="s-den" min="2" max="28" value="10">
+  </div>
+
+  <div class="row">
+    <div class="lbl"><span>Scala</span><span class="val" id="v-sca">80</span></div>
+    <input type="range" id="s-sca" min="20" max="150" value="80">
+  </div>
+
+  <div class="row">
+    <div class="lbl"><span>Chaos</span><span class="val" id="v-cha">30</span></div>
+    <input type="range" id="s-cha" min="0" max="100" value="30">
+  </div>
+
+  <div class="row">
+    <div class="lbl"><span>Tipografia</span><span class="val" id="v-tip">65</span></div>
+    <input type="range" id="s-tip" min="0" max="120" value="65">
+  </div>
+
+  <div class="row">
+    <div class="lbl"><span>Palette</span><span class="val" id="v-pal">01 / 08</span></div>
+    <div class="palette-strip" id="palette-strip"></div>
+  </div>
+
+  <div class="text-row">
+    <div class="lbl"><span>Testo</span><span class="val" id="v-words">— / —</span></div>
+    <textarea id="user-text" placeholder="scrivi qui&#10;separa con virgole per ciclare"></textarea>
+    <div class="hint">virgola o a-capo = nuova parola</div>
+  </div>
+
+  <div class="buttons">
+    <button id="btn-pause">PAUSE</button>
+    <button id="btn-shuffle">SHUFFLE</button>
+    <button id="btn-png">PNG</button>
+  </div>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  // ── Canvas ─────────────────────────────────────────────────────────────────
+
+  const canvas = document.getElementById('c');
+  const ctx    = canvas.getContext('2d');
+
+  let W, H;
+  function resize() {
+    W = window.innerWidth;
+    H = window.innerHeight;
+    canvas.width  = W;
+    canvas.height = H;
+  }
+  resize();
+  window.addEventListener('resize', resize);
+
+  // Pixel-crisp rendering
+  ctx.imageSmoothingEnabled = false;
+
+  // ── Palettes (Studio-Mistaker flat tints) ─────────────────────────────────
+  // First color = background, rest = shapes/text
+
+  const PALETTES = [
+    ['#FFFFFF', '#000000'],                                  // 00 mono inverted
+    ['#000000', '#FFFFFF'],                                  // 01 mono
+    ['#FFE600', '#000000', '#FFFFFF'],                       // 02 yellow alert
+    ['#FF2D2D', '#FFFFFF', '#000000', '#FFE600'],            // 03 red pop
+    ['#00C2FF', '#FF2D8F', '#FFFFFF', '#000000'],            // 04 electric
+    ['#181818', '#FF6B35', '#F7C59F', '#EFEFD0'],            // 05 warm dark
+    ['#0033FF', '#FFFFFF', '#FFE600', '#FF2D2D'],            // 06 primaries
+    ['#0BFF6A', '#000000', '#FFFFFF', '#FF00AA']             // 07 acid
+  ];
+
+  let palIdx = 1;
+
+  // ── Words (filled by user input — empty array = no hero text) ─────────────
+
+  let WORDS = [];
+
+  function parseUserText(raw) {
+    return raw
+      .split(/[,\n]+/)
+      .map(s => s.trim())
+      .filter(Boolean);
+  }
+
+  const SHAPES = [
+    'square','circle','ring','triangle','diamond','plus','cross',
+    'bar-h','bar-v','slash','backslash','arc-up','arc-dn','dot','halfL','halfR'
+  ];
+
+  // ── State (slider-bound) ──────────────────────────────────────────────────
+
+  const state = {
+    fps:     10,
+    density: 10,
+    scale:   80,
+    chaos:   30,
+    typo:    65,
+    paused:  false
+  };
+
+  let frame      = 0;
+  let tickHandle = null;
+
+  // Seeded RNG so each frame produces deterministic shape distribution
+  function rng(seed) {
+    let s = seed | 0;
+    return function () {
+      s = (s * 1664525 + 1013904223) | 0;
+      return ((s >>> 0) % 100000) / 100000;
+    };
+  }
+
+  // ── Main tick (called at `fps` Hz) ────────────────────────────────────────
+
+  function tick() {
+    if (state.paused) return;
+    frame++;
+    render();
+  }
+
+  function startTick() {
+    if (tickHandle) clearInterval(tickHandle);
+    tickHandle = setInterval(tick, 1000 / state.fps);
+  }
+
+  // ── Render one frame ──────────────────────────────────────────────────────
+
+  function render() {
+    const pal = PALETTES[palIdx];
+    const cols = state.density;
+    const rows = Math.max(2, Math.ceil(H / (W / cols)));
+    const cw   = W / cols;
+    const rh   = H / rows;
+    const sizeF = state.scale / 100;
+    const chaos = state.chaos / 100;
+
+    // Background flat fill
+    ctx.fillStyle = pal[0];
+    ctx.fillRect(0, 0, W, H);
+
+    // Per-frame seeded random
+    const rand = rng(frame * 9173 + palIdx * 71 + cols * 13);
+
+    // ── Grid of shapes ───────────────────────────────────────────────────────
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        // Chaos: random skip
+        if (rand() < chaos * 0.18) continue;
+
+        // Cell centre with chaos jitter
+        const jit = chaos * Math.min(cw, rh) * 0.45;
+        const cx  = c * cw + cw * 0.5 + (rand() - 0.5) * jit;
+        const cy  = r * rh + rh * 0.5 + (rand() - 0.5) * jit;
+
+        const baseSz = Math.min(cw, rh) * sizeF;
+        // Chaos: size variance
+        const sz = baseSz * (1 - chaos * 0.4 + rand() * chaos * 0.8);
+
+        // Pick shape & colour
+        const shape  = SHAPES[Math.floor(rand() * SHAPES.length)];
+        const colour = pal[1 + Math.floor(rand() * (pal.length - 1))];
+        const rot    = chaos > 0.05 ? (rand() - 0.5) * Math.PI * chaos : 0;
+
+        drawShape(shape, cx, cy, sz, colour, rot);
+      }
+    }
+
+    // ── Chaos overlay bars ───────────────────────────────────────────────────
+    if (chaos > 0.4) {
+      const nbars = Math.floor((chaos - 0.4) * 12);
+      for (let i = 0; i < nbars; i++) {
+        const colour = pal[1 + Math.floor(rand() * (pal.length - 1))];
+        ctx.fillStyle = colour;
+        if (rand() < 0.5) {
+          ctx.fillRect(0, rand() * H, W, 2 + rand() * 16);
+        } else {
+          ctx.fillRect(rand() * W, 0, 2 + rand() * 16, H);
+        }
+      }
+    }
+
+    // ── Hero typography ──────────────────────────────────────────────────────
+    if (state.typo > 0 && WORDS.length > 0) {
+      const word = WORDS[frame % WORDS.length];
+      drawHeroText(word, pal, rand);
+      document.getElementById('r-word').textContent = word;
+    } else {
+      document.getElementById('r-word').textContent = '—';
+    }
+
+    // Frame counter
+    document.getElementById('r-frame').textContent =
+      'FRAME ' + String(frame).padStart(6, '0');
+  }
+
+  // ── Shape drawing ─────────────────────────────────────────────────────────
+
+  function drawShape(type, x, y, sz, col, rot) {
+    ctx.save();
+    ctx.translate(x, y);
+    if (rot) ctx.rotate(rot);
+    ctx.fillStyle   = col;
+    ctx.strokeStyle = col;
+
+    const s = sz;
+    const h = s * 0.5;
+    const t = Math.max(2, s * 0.16);
+
+    switch (type) {
+      case 'square':
+        ctx.fillRect(-h, -h, s, s);
+        break;
+
+      case 'circle':
+        ctx.beginPath();
+        ctx.arc(0, 0, h * 0.95, 0, Math.PI * 2);
+        ctx.fill();
+        break;
+
+      case 'ring':
+        ctx.lineWidth = t;
+        ctx.beginPath();
+        ctx.arc(0, 0, h * 0.85, 0, Math.PI * 2);
+        ctx.stroke();
+        break;
+
+      case 'triangle':
+        ctx.beginPath();
+        ctx.moveTo(0, -h);
+        ctx.lineTo(h, h);
+        ctx.lineTo(-h, h);
+        ctx.closePath();
+        ctx.fill();
+        break;
+
+      case 'diamond':
+        ctx.beginPath();
+        ctx.moveTo(0, -h);
+        ctx.lineTo(h, 0);
+        ctx.lineTo(0, h);
+        ctx.lineTo(-h, 0);
+        ctx.closePath();
+        ctx.fill();
+        break;
+
+      case 'plus':
+        ctx.fillRect(-h, -t * 0.5, s, t);
+        ctx.fillRect(-t * 0.5, -h, t, s);
+        break;
+
+      case 'cross':
+        ctx.lineWidth = t;
+        ctx.beginPath();
+        ctx.moveTo(-h, -h); ctx.lineTo(h, h);
+        ctx.moveTo(h, -h);  ctx.lineTo(-h, h);
+        ctx.stroke();
+        break;
+
+      case 'bar-h':
+        ctx.fillRect(-h, -t * 0.7, s, t * 1.4);
+        break;
+
+      case 'bar-v':
+        ctx.fillRect(-t * 0.7, -h, t * 1.4, s);
+        break;
+
+      case 'slash':
+        ctx.lineWidth = t * 1.4;
+        ctx.beginPath();
+        ctx.moveTo(-h, -h);
+        ctx.lineTo(h, h);
+        ctx.stroke();
+        break;
+
+      case 'backslash':
+        ctx.lineWidth = t * 1.4;
+        ctx.beginPath();
+        ctx.moveTo(h, -h);
+        ctx.lineTo(-h, h);
+        ctx.stroke();
+        break;
+
+      case 'arc-up':
+        ctx.beginPath();
+        ctx.arc(0, h * 0.3, h, Math.PI, 0);
+        ctx.closePath();
+        ctx.fill();
+        break;
+
+      case 'arc-dn':
+        ctx.beginPath();
+        ctx.arc(0, -h * 0.3, h, 0, Math.PI);
+        ctx.closePath();
+        ctx.fill();
+        break;
+
+      case 'dot':
+        ctx.beginPath();
+        ctx.arc(0, 0, h * 0.35, 0, Math.PI * 2);
+        ctx.fill();
+        break;
+
+      case 'halfL':
+        ctx.fillRect(-h, -h, h, s);
+        break;
+
+      case 'halfR':
+        ctx.fillRect(0, -h, h, s);
+        break;
+    }
+    ctx.restore();
+  }
+
+  // ── Hero text ─────────────────────────────────────────────────────────────
+
+  function drawHeroText(word, pal, rand) {
+    const targetW = W * (state.typo / 100);
+    if (targetW < 50) return;
+
+    // Find font size that fills targetW
+    let fs = Math.min(H * 0.7, 600);
+    ctx.font = `900 ${fs}px 'Helvetica Neue', Helvetica, Arial, sans-serif`;
+    const measured = ctx.measureText(word).width;
+    if (measured > 0) fs = fs * (targetW / measured);
+    fs = Math.min(fs, H * 0.85);
+
+    ctx.font = `900 ${fs}px 'Helvetica Neue', Helvetica, Arial, sans-serif`;
+    ctx.textBaseline = 'middle';
+    ctx.textAlign    = 'center';
+
+    const cx = W * 0.5;
+    const cy = H * 0.5;
+
+    // Build a contrasting colour stack from the palette
+    const fg = pal[pal.length > 2 ? 1 + (frame % (pal.length - 1)) : 1];
+    const sh = pal.length > 2 ? pal[1 + ((frame + 1) % (pal.length - 1))] : pal[0];
+
+    // Hard offset "shadow" for that printed-misregistration feel
+    const chaos = state.chaos / 100;
+    const ox = (rand() - 0.5) * fs * 0.06 * (0.4 + chaos);
+    const oy = (rand() - 0.5) * fs * 0.06 * (0.4 + chaos);
+
+    ctx.fillStyle = sh;
+    ctx.fillText(word, cx + ox, cy + oy);
+
+    ctx.fillStyle = fg;
+    ctx.fillText(word, cx, cy);
+  }
+
+  // ── Slider wiring ─────────────────────────────────────────────────────────
+
+  function wire(id, key, fmt, after) {
+    const el  = document.getElementById('s-' + id);
+    const val = document.getElementById('v-' + id);
+    el.addEventListener('input', () => {
+      state[key] = +el.value;
+      val.textContent = fmt ? fmt(state[key]) : state[key];
+      if (after) after();
+      render();
+    });
+  }
+
+  wire('fps', 'fps', v => v, () => startTick());
+  wire('den', 'density');
+  wire('sca', 'scale', v => v);
+  wire('cha', 'chaos', v => v);
+  wire('tip', 'typo',  v => v);
+
+  // ── Palette strip ─────────────────────────────────────────────────────────
+
+  const strip = document.getElementById('palette-strip');
+  PALETTES.forEach((pal, i) => {
+    const sw = document.createElement('div');
+    sw.className = 'swatch' + (i === palIdx ? ' active' : '');
+    // Show two-stripe preview: bg + first accent
+    sw.style.background =
+      `linear-gradient(135deg, ${pal[0]} 50%, ${pal[1] || pal[0]} 50%)`;
+    sw.addEventListener('click', () => {
+      palIdx = i;
+      [...strip.children].forEach((c, j) => c.classList.toggle('active', j === i));
+      document.getElementById('v-pal').textContent =
+        String(i + 1).padStart(2, '0') + ' / ' + String(PALETTES.length).padStart(2, '0');
+      render();
+    });
+    strip.appendChild(sw);
+  });
+  document.getElementById('v-pal').textContent =
+    String(palIdx + 1).padStart(2, '0') + ' / ' + String(PALETTES.length).padStart(2, '0');
+
+  // ── Buttons ───────────────────────────────────────────────────────────────
+
+  const btnPause = document.getElementById('btn-pause');
+  btnPause.addEventListener('click', () => {
+    state.paused = !state.paused;
+    btnPause.textContent = state.paused ? 'PLAY' : 'PAUSE';
+    btnPause.classList.toggle('active', state.paused);
+  });
+
+  document.getElementById('btn-shuffle').addEventListener('click', () => {
+    state.density = 2 + Math.floor(Math.random() * 24);
+    state.scale   = 30 + Math.floor(Math.random() * 110);
+    state.chaos   = Math.floor(Math.random() * 100);
+    state.typo    = Math.floor(Math.random() * 110);
+    palIdx        = Math.floor(Math.random() * PALETTES.length);
+
+    document.getElementById('s-den').value = state.density;
+    document.getElementById('s-sca').value = state.scale;
+    document.getElementById('s-cha').value = state.chaos;
+    document.getElementById('s-tip').value = state.typo;
+    document.getElementById('v-den').textContent = state.density;
+    document.getElementById('v-sca').textContent = state.scale;
+    document.getElementById('v-cha').textContent = state.chaos;
+    document.getElementById('v-tip').textContent = state.typo;
+    [...strip.children].forEach((c, j) => c.classList.toggle('active', j === palIdx));
+    document.getElementById('v-pal').textContent =
+      String(palIdx + 1).padStart(2, '0') + ' / ' + String(PALETTES.length).padStart(2, '0');
+
+    render();
+  });
+
+  document.getElementById('btn-png').addEventListener('click', () => {
+    const link = document.createElement('a');
+    link.download = 'mistaker-' + String(frame).padStart(6, '0') + '.png';
+    link.href = canvas.toDataURL('image/png');
+    link.click();
+  });
+
+  // ── User text input ───────────────────────────────────────────────────────
+
+  const userText = document.getElementById('user-text');
+  const vWords   = document.getElementById('v-words');
+
+  function refreshWords() {
+    WORDS = parseUserText(userText.value);
+    if (WORDS.length === 0) {
+      vWords.textContent = '— / —';
+    } else {
+      vWords.textContent = '01 / ' + String(WORDS.length).padStart(2, '0');
+    }
+    render();
+  }
+
+  userText.addEventListener('input', refreshWords);
+  // Don't let global keyboard shortcuts fire while typing
+  userText.addEventListener('keydown', e => e.stopPropagation());
+
+  // ── Keyboard ──────────────────────────────────────────────────────────────
+
+  document.addEventListener('keydown', e => {
+    if (document.activeElement === userText) return;
+    if (e.key === ' ')          { btnPause.click(); e.preventDefault(); }
+    else if (e.key === 's' || e.key === 'S') document.getElementById('btn-shuffle').click();
+    else if (e.key === 'p' || e.key === 'P') document.getElementById('btn-png').click();
+  });
+
+  // ── Boot ──────────────────────────────────────────────────────────────────
+
+  startTick();
+  render();
+
+})();
+</script>
+</body>
+</html>

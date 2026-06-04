@@ -1,0 +1,599 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TIPO</title>
+  <style>
+    *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: #000;
+      overflow: hidden;
+      font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+    }
+
+    canvas { display: block; cursor: none; }
+
+    #top {
+      position: fixed;
+      top: 24px; left: 0; right: 0;
+      display: flex;
+      justify-content: space-between;
+      padding: 0 26px;
+      pointer-events: none;
+      z-index: 10;
+      font-size: 10px;
+      letter-spacing: 0.32em;
+      text-transform: uppercase;
+      color: rgba(255,255,255,0.18);
+      line-height: 1;
+    }
+
+    #hints { text-align: right; line-height: 2.4; }
+
+    #prompt-bar {
+      position: fixed;
+      bottom: 0; left: 0; right: 0;
+      padding: 20px 26px 22px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      z-index: 10;
+    }
+
+    #prompt-arrow {
+      font-size: 11px;
+      letter-spacing: 0.2em;
+      color: rgba(255,255,255,0.18);
+      pointer-events: none;
+    }
+
+    #prompt-input {
+      flex: 0 0 360px;
+      background: transparent;
+      border: none;
+      border-bottom: 1px solid rgba(255,255,255,0.1);
+      color: rgba(255,255,255,0.55);
+      font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+      font-size: 12px;
+      letter-spacing: 0.22em;
+      text-transform: uppercase;
+      padding: 6px 2px;
+      outline: none;
+      caret-color: rgba(255,255,255,0.35);
+      transition: border-color 0.3s;
+    }
+    #prompt-input:focus { border-color: rgba(255,255,255,0.28); }
+    #prompt-input::placeholder { color: rgba(255,255,255,0.1); letter-spacing: 0.22em; }
+
+    #counter {
+      font-size: 10px;
+      letter-spacing: 0.22em;
+      color: rgba(255,255,255,0.1);
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+
+<canvas id="c"></canvas>
+
+<div id="top">
+  <div>TIPO</div>
+  <div id="hints">
+    Muovi — repulsione<br>
+    Click su parola — esplosione lettere<br>
+    Click libero — burst<br>
+    Invio — aggiungi parola
+  </div>
+</div>
+
+<div id="prompt-bar">
+  <span id="prompt-arrow">→</span>
+  <input id="prompt-input" type="text" placeholder="scrivi e premi invio" autocomplete="off" spellcheck="false" maxlength="40">
+  <span id="counter">0</span>
+</div>
+
+<script>
+(function () {
+  'use strict';
+
+  // ── Canvas & context ──────────────────────────────────────────────────────
+
+  const canvas  = document.getElementById('c');
+  const ctx     = canvas.getContext('2d');
+  const input   = document.getElementById('prompt-input');
+  const counter = document.getElementById('counter');
+
+  let W = window.innerWidth;
+  let H = window.innerHeight;
+  canvas.width  = W;
+  canvas.height = H;
+
+  const HAS_LS = 'letterSpacing' in ctx;
+
+  // ── Helpers ───────────────────────────────────────────────────────────────
+
+  function rnd(a, b)  { return a + Math.random() * (b - a); }
+  function pick(arr)  { return arr[Math.floor(Math.random() * arr.length)]; }
+  function clamp(v,a,b) { return v < a ? a : v > b ? b : v; }
+
+  // ── State ─────────────────────────────────────────────────────────────────
+
+  const mouse = { x: W * 0.5, y: H * 0.5 };
+  let   pendingBurst = null;   // { x, y, str }
+
+  // ── Word pool ─────────────────────────────────────────────────────────────
+
+  const POOL = [
+    'FORMA','VUOTO','LUCE','OMBRA','TEMPO','SPAZIO',
+    'CORPO','MENTE','VOCE','SILENZIO','MOTO','FERMO',
+    'LINEA','PUNTO','CAMPO','FORZA','MASSA','ONDA',
+    'CHAOS','ORDINE','SISTEMA','RETE','NODO','FLUSSO',
+    'TIPO','SEGNO','TRACCIA','GESTO','PESO','STATO',
+    'NOW','HERE','OPEN','CLOSE','PUSH','PULL','HOLD',
+    'BREAK','FOLD','SPLIT','MERGE','SCATTER','GATHER',
+    'DRIFT','PULSE','ECHO','VOID','GRID','FLUX',
+    'MATERIA','ENERGIA','SOGLIA','STRATO','DERIVA',
+    'WHITE','BLACK','GREY','MARK','SPACE','LINE',
+    'TENSIONE','FRIZIONE','DENSITÀ','PRESSIONE','VELOCITÀ'
+  ];
+
+  const SIZES = [9,10,11,12,13,14,16,18,20,24,30,38,48,64,84];
+  const LS_V  = ['0em','0.06em','0.12em','0.18em','0.28em','0.4em'];
+
+  // ── Letter particle (post-explosion) ─────────────────────────────────────
+
+  const letters = [];
+
+  class Letter {
+    constructor(ch, x, y, sz) {
+      this.ch  = ch;
+      this.x   = x;
+      this.y   = y;
+      this.vx  = rnd(-10, 10);
+      this.vy  = rnd(-10, 10);
+      this.sz  = sz;
+      this.rot = rnd(-Math.PI, Math.PI);
+      this.rv  = rnd(-0.06, 0.06);
+      this.t   = 0;
+      this.max = Math.floor(rnd(45, 90));
+      this.dead = false;
+    }
+
+    update() {
+      this.t++;
+      if (this.t >= this.max) { this.dead = true; return; }
+      this.vx *= 0.91;
+      this.vy *= 0.91;
+      this.vy += 0.12;          // light gravity
+      this.x  += this.vx;
+      this.y  += this.vy;
+      this.rot += this.rv;
+    }
+
+    draw() {
+      const a = 1 - this.t / this.max;
+      if (a < 0.01) return;
+      ctx.save();
+      ctx.translate(this.x, this.y);
+      ctx.rotate(this.rot);
+      ctx.globalAlpha = a;
+      ctx.font = `${this.sz}px Helvetica, Arial, sans-serif`;
+      ctx.fillStyle = '#fff';
+      ctx.textBaseline = 'middle';
+      ctx.textAlign   = 'center';
+      ctx.fillText(this.ch, 0, 0);
+      ctx.restore();
+    }
+  }
+
+  // ── Word particle ─────────────────────────────────────────────────────────
+
+  let words = [];
+  const MAX_WORDS = 48;
+
+  class Word {
+    constructor(text, ox, oy, sz) {
+      this.text = (text || pick(POOL)).toUpperCase();
+      this.sz   = sz  || pick(SIZES);
+      this.ls   = pick(LS_V);
+
+      if (ox !== undefined) {
+        this.x  = ox;  this.y  = oy;
+        this.vx = rnd(-3, 3);
+        this.vy = rnd(-3, 3);
+      } else {
+        const edge = Math.floor(rnd(0, 4));
+        const m = 60;
+        if      (edge === 0) { this.x = rnd(0,W); this.y = -m; }
+        else if (edge === 1) { this.x = W + m;    this.y = rnd(0,H); }
+        else if (edge === 2) { this.x = rnd(0,W); this.y = H + m; }
+        else                 { this.x = -m;        this.y = rnd(0,H); }
+        this.vx = rnd(-0.7, 0.7);
+        this.vy = rnd(-0.7, 0.7);
+      }
+
+      this.baseA = rnd(0.1, 0.6);
+      this.a     = 0;
+      this.rot   = rnd(-0.09, 0.09);
+      this.rv    = rnd(-0.0012, 0.0012);
+      this.hi    = 0;            // hover highlight 0-1
+
+      this.frame = 0;
+      this.max   = Math.floor(rnd(440, 1300));
+      this.dead  = false;
+      this.w     = 0;
+
+      this._measure();
+    }
+
+    _measure() {
+      ctx.font = `${this.sz}px Helvetica, Arial, sans-serif`;
+      if (HAS_LS) ctx.letterSpacing = this.ls;
+      this.w = ctx.measureText(this.text).width;
+      if (HAS_LS) ctx.letterSpacing = '0px';
+    }
+
+    // Half-width & half-height for hit testing
+    get hw() { return this.w  * 0.5 + 6; }
+    get hh() { return this.sz * 0.5 + 4; }
+
+    explode() {
+      const charW = this.sz * 0.6;
+      const n = this.text.length;
+      const startX = this.x - (n * charW) * 0.5;
+      for (let i = 0; i < n; i++) {
+        letters.push(new Letter(
+          this.text[i],
+          startX + i * charW,
+          this.y,
+          this.sz
+        ));
+      }
+      this.dead = true;
+    }
+
+    update(burst) {
+      this.frame++;
+
+      // Opacity envelope
+      const fi = 55, fo = 65;
+      if      (this.frame < fi)              this.a = (this.frame / fi) * this.baseA;
+      else if (this.frame > this.max - fo)   this.a = Math.max(0, ((this.max - this.frame) / fo) * this.baseA);
+      else                                   this.a = this.baseA;
+
+      if (this.frame >= this.max) { this.dead = true; return; }
+
+      // Mouse repulsion
+      const dx = this.x - mouse.x;
+      const dy = this.y - mouse.y;
+      const d2 = dx * dx + dy * dy;
+      const R  = 145;
+      if (d2 < R * R && d2 > 0.01) {
+        const d   = Math.sqrt(d2);
+        const str = (1 - d / R) * 3.2;
+        this.vx  += (dx / d) * str;
+        this.vy  += (dy / d) * str;
+        this.hi   = clamp(1 - d / R, 0, 1);
+      } else {
+        this.hi *= 0.88;
+      }
+
+      // Burst force (click)
+      if (burst) {
+        const bx = this.x - burst.x;
+        const by = this.y - burst.y;
+        const bd = Math.sqrt(bx * bx + by * by) || 1;
+        const f  = burst.str / (1 + bd * 0.007);
+        this.vx += (bx / bd) * f;
+        this.vy += (by / bd) * f;
+        // Extend life so we can enjoy the result
+        if (this.frame > this.max - 200) this.max = this.frame + Math.floor(rnd(120, 260));
+      }
+
+      // Damping
+      this.vx *= 0.956;
+      this.vy *= 0.956;
+
+      // Weak centripetal pull (keeps field populated at centre)
+      this.vx += (W * 0.5 - this.x) * 0.00009;
+      this.vy += (H * 0.5 - this.y) * 0.00009;
+
+      this.x  += this.vx;
+      this.y  += this.vy;
+      this.rot += this.rv;
+
+      // Wrap
+      if (this.x < -220) this.x = W + 220;
+      if (this.x > W+220) this.x = -220;
+      if (this.y < -220) this.y = H + 220;
+      if (this.y > H+220) this.y = -220;
+    }
+
+    draw() {
+      if (this.a < 0.004) return;
+      ctx.save();
+      ctx.translate(this.x, this.y);
+      ctx.rotate(this.rot);
+      const alpha = clamp(this.a * (1 + this.hi * 0.7), 0, 1);
+      ctx.globalAlpha = alpha;
+      ctx.font = `${this.sz}px Helvetica, Arial, sans-serif`;
+      ctx.fillStyle = '#fff';
+      ctx.textBaseline = 'middle';
+      ctx.textAlign    = 'center';
+      if (HAS_LS) ctx.letterSpacing = this.ls;
+      ctx.fillText(this.text, 0, 0);
+      if (HAS_LS) ctx.letterSpacing = '0px';
+      ctx.restore();
+    }
+  }
+
+  // ── Connection lines ──────────────────────────────────────────────────────
+
+  function drawLines() {
+    const MAX_D = 160;
+    ctx.lineWidth = 0.35;
+    ctx.strokeStyle = '#fff';
+    for (let i = 0; i < words.length; i++) {
+      for (let j = i + 1; j < words.length; j++) {
+        const a = words[i], b = words[j];
+        const dx = a.x - b.x, dy = a.y - b.y;
+        const d  = Math.sqrt(dx * dx + dy * dy);
+        if (d < MAX_D) {
+          ctx.globalAlpha = (1 - d / MAX_D) * 0.09 * Math.min(a.a, b.a) * 3;
+          ctx.beginPath();
+          ctx.moveTo(a.x, a.y);
+          ctx.lineTo(b.x, b.y);
+          ctx.stroke();
+        }
+      }
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  // ── Background ghost word ─────────────────────────────────────────────────
+
+  let bgList  = POOL.slice().sort(() => Math.random() - 0.5);
+  let bgIdx   = 0;
+  let bgFrame = 0;
+  let bgA     = 0;
+  let bgPhase = 'in';
+  const BG_IN = 90, BG_HOLD = 260, BG_OUT = 90;
+
+  function updateDrawBg() {
+    bgFrame++;
+    if      (bgPhase === 'in')   { bgA = bgFrame / BG_IN;   if (bgFrame >= BG_IN)   { bgPhase = 'hold'; bgFrame = 0; } }
+    else if (bgPhase === 'hold') {                            if (bgFrame >= BG_HOLD) { bgPhase = 'out';  bgFrame = 0; } }
+    else                         { bgA = 1 - bgFrame / BG_OUT; if (bgFrame >= BG_OUT)  { bgPhase = 'in'; bgFrame = 0; bgIdx = (bgIdx + 1) % bgList.length; } }
+
+    const alpha = bgA * 0.032;
+    if (alpha < 0.002) return;
+
+    const text = bgList[bgIdx];
+    const fs   = Math.min(W * 0.26, 210);
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.font = `${fs}px Helvetica, Arial, sans-serif`;
+    if (HAS_LS) ctx.letterSpacing = '0.08em';
+    ctx.fillStyle    = '#fff';
+    ctx.textBaseline = 'middle';
+    ctx.textAlign    = 'center';
+    ctx.fillText(text, W * 0.5, H * 0.5);
+    if (HAS_LS) ctx.letterSpacing = '0px';
+    ctx.restore();
+  }
+
+  // ── Burst rings ───────────────────────────────────────────────────────────
+
+  const rings = [];
+
+  function addRing(x, y) {
+    rings.push({ x, y, t: 0, max: 52 });
+  }
+
+  function updateDrawRings() {
+    for (let i = rings.length - 1; i >= 0; i--) {
+      const r = rings[i];
+      r.t++;
+      const pct = r.t / r.max;
+      ctx.save();
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth   = 0.8;
+      ctx.globalAlpha = (1 - pct) * 0.55;
+      ctx.beginPath();
+      ctx.arc(r.x, r.y, pct * 230, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.restore();
+      if (r.t >= r.max) rings.splice(i, 1);
+    }
+  }
+
+  // ── Mouse trail ───────────────────────────────────────────────────────────
+
+  const trail = [];
+  let   prevMouse = { x: mouse.x, y: mouse.y };
+
+  function updateDrawTrail() {
+    const dx = mouse.x - prevMouse.x;
+    const dy = mouse.y - prevMouse.y;
+    if (dx * dx + dy * dy > 6) {
+      trail.push({ x: mouse.x, y: mouse.y, t: 0 });
+      prevMouse = { x: mouse.x, y: mouse.y };
+    }
+    while (trail.length > 20) trail.shift();
+
+    for (let i = 0; i < trail.length; i++) {
+      const p = trail[i];
+      p.t++;
+      const a = (1 - p.t / 28) * 0.18 * (i / trail.length);
+      if (a < 0.01) continue;
+      ctx.save();
+      ctx.globalAlpha = a;
+      ctx.fillStyle   = '#fff';
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, Math.max(0.4, 1.8 * (1 - p.t / 28)), 0, Math.PI * 2);
+      ctx.fill();
+      ctx.restore();
+    }
+  }
+
+  // ── Custom cursor ─────────────────────────────────────────────────────────
+
+  let cursorT = 0;
+
+  function drawCursor() {
+    cursorT += 0.055;
+    const r = 16 + Math.sin(cursorT) * 3.5;
+    ctx.save();
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth   = 0.5;
+    ctx.globalAlpha = 0.32;
+    ctx.beginPath();
+    ctx.arc(mouse.x, mouse.y, r, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.globalAlpha = 0.55;
+    ctx.fillStyle   = '#fff';
+    ctx.beginPath();
+    ctx.arc(mouse.x, mouse.y, 1.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  // ── Seed & maintain ───────────────────────────────────────────────────────
+
+  function seed() {
+    for (let i = 0; i < 32; i++) {
+      words.push(new Word(pick(POOL), rnd(0, W), rnd(0, H)));
+    }
+  }
+
+  function maintain() {
+    words = words.filter(w => !w.dead);
+    if (words.length < MAX_WORDS && Math.random() < 0.03) {
+      words.push(new Word());
+    }
+    counter.textContent = words.length;
+  }
+
+  // ── Click: hit-test words, explode or burst ───────────────────────────────
+
+  function handleClick(cx, cy) {
+    // Transform click into each word's local frame (approximate: ignore rotation for hit)
+    let hit = null;
+    let bestD = Infinity;
+    for (const w of words) {
+      const dx = Math.abs(cx - w.x);
+      const dy = Math.abs(cy - w.y);
+      if (dx < w.hw && dy < w.hh) {
+        const d = dx * dx + dy * dy;
+        if (d < bestD) { bestD = d; hit = w; }
+      }
+    }
+
+    if (hit) {
+      hit.explode();
+      // Small focused ring at word
+      addRing(hit.x, hit.y);
+    } else {
+      // General burst
+      pendingBurst = { x: cx, y: cy, str: 9 };
+      addRing(cx, cy);
+    }
+  }
+
+  // ── Render loop ───────────────────────────────────────────────────────────
+
+  function render() {
+    requestAnimationFrame(render);
+
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, W, H);
+
+    updateDrawBg();
+    drawLines();
+    updateDrawRings();
+    updateDrawTrail();
+
+    // Letter debris
+    for (let i = letters.length - 1; i >= 0; i--) {
+      letters[i].update();
+      letters[i].draw();
+      if (letters[i].dead) letters.splice(i, 1);
+    }
+
+    const burst = pendingBurst;
+    pendingBurst = null;
+
+    for (const w of words) {
+      w.update(burst);
+      w.draw();
+    }
+
+    drawCursor();
+    maintain();
+  }
+
+  // ── Events ────────────────────────────────────────────────────────────────
+
+  canvas.addEventListener('mousemove', e => {
+    mouse.x = e.clientX;
+    mouse.y = e.clientY;
+  });
+
+  canvas.addEventListener('click', e => {
+    handleClick(e.clientX, e.clientY);
+  });
+
+  // Touch support
+  canvas.addEventListener('touchmove', e => {
+    e.preventDefault();
+    mouse.x = e.touches[0].clientX;
+    mouse.y = e.touches[0].clientY;
+  }, { passive: false });
+
+  canvas.addEventListener('touchstart', e => {
+    e.preventDefault();
+    mouse.x = e.touches[0].clientX;
+    mouse.y = e.touches[0].clientY;
+    handleClick(mouse.x, mouse.y);
+  }, { passive: false });
+
+  input.addEventListener('keydown', e => {
+    if (e.key !== 'Enter') return;
+    const val = input.value.trim();
+    if (!val) return;
+    const n = clamp(1 + Math.floor(val.length / 5), 1, 4);
+    for (let i = 0; i < n; i++) {
+      const x  = W * 0.5 + rnd(-180, 180);
+      const y  = H * 0.5 + rnd(-130, 130);
+      const sz = pick([14, 18, 22, 28, 36, 46, 58]);
+      words.push(new Word(val, x, y, sz));
+    }
+    input.value = '';
+    e.preventDefault();
+  });
+
+  document.addEventListener('keydown', e => {
+    if (document.activeElement !== input && e.key.length === 1 && !e.ctrlKey && !e.metaKey) {
+      input.focus();
+    }
+  });
+
+  window.addEventListener('resize', () => {
+    W = window.innerWidth;
+    H = window.innerHeight;
+    canvas.width  = W;
+    canvas.height = H;
+  });
+
+  // ── Start ─────────────────────────────────────────────────────────────────
+
+  seed();
+  requestAnimationFrame(render);
+
+})();
+</script>
+</body>
+</html>

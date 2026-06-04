@@ -1,0 +1,914 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <title>Reveal — Poster</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #000; overflow: hidden; }
+    canvas { display: block; }
+    video { display: none; }
+    #loading {
+      position: fixed; inset: 0; background: #000; color: #fff;
+      font-family: "Neue Haas Grotesk Display Pro", "Neue Haas Grotesk Text Pro", "Helvetica Neue", Helvetica, Arial, sans-serif;
+      font-size: 16px; letter-spacing: 0.25em; text-transform: uppercase;
+      display: flex; flex-direction: column; align-items: center;
+      justify-content: center; gap: 24px; z-index: 99;
+    }
+    #loading p { opacity: 0.5; font-size: 12px; letter-spacing: 0.15em; }
+    #ui {
+      position: fixed; bottom: 18px; right: 18px;
+      display: flex; gap: 10px; z-index: 10;
+      font-family: "Neue Haas Grotesk Display Pro", "Helvetica Neue", Helvetica, Arial, sans-serif;
+    }
+    #ui button {
+      background: rgba(0,0,0,0.5);
+      color: #fff;
+      border: 1px solid rgba(255,255,255,0.4);
+      padding: 8px 14px;
+      font-size: 11px;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      cursor: pointer;
+      backdrop-filter: blur(6px);
+    }
+    #ui button:hover { background: rgba(255,255,255,0.15); }
+  </style>
+</head>
+<body>
+  <div id="loading">
+    <span>Inizializzazione...</span>
+    <p>Consenti l'accesso alla fotocamera</p>
+  </div>
+  <video id="video" playsinline></video>
+  <canvas id="canvas"></canvas>
+  <div id="ui">
+    <button id="btnReveal" title="Svela tutto (R)">Reveal</button>
+    <button id="btnClear"  title="Cancella percorso (C)">Clear</button>
+    <button id="btnSave"   title="Esporta SVG (S)">↓ SVG</button>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+  <script>
+  (function () {
+    'use strict';
+
+    var W = window.innerWidth;
+    var H = window.innerHeight;
+
+    var canvas = document.getElementById('canvas');
+    canvas.width = W; canvas.height = H;
+    var ctx = canvas.getContext('2d');
+
+    var textLayer = document.createElement('canvas');
+    textLayer.width = W; textLayer.height = H;
+    var tCtx = textLayer.getContext('2d');
+
+    var maskLayer = document.createElement('canvas');
+    maskLayer.width = W; maskLayer.height = H;
+    var mCtx = maskLayer.getContext('2d');
+    mCtx.fillStyle = '#000';
+    mCtx.fillRect(0, 0, W, H);
+
+    // ── Font (Neue Haas Grotesk con fallback Helvetica) ──────────────────────
+    var FONT_STACK = '"Neue Haas Grotesk Display Pro", "Neue Haas Grotesk Text Pro", "NeueHaasGrotesk", "Helvetica Neue", Helvetica, Arial, sans-serif';
+    var MIN_FONT_SIZE = 16;
+    var MAX_FONT_SIZE = 360;
+    var LINE_HEIGHT_MUL = 1.05;
+
+    // ── Frasi storiche italiane (pubblico dominio) ───────────────────────────
+    var PHRASES = [
+      // Dante · Divina Commedia · 1320
+      'Nel mezzo del cammin di nostra vita mi ritrovai per una selva oscura',
+      'Lasciate ogni speranza, voi ch\'entrate',
+      'Amor che a nullo amato amar perdona',
+      'Per me si va ne la città dolente, per me si va ne l\'etterno dolore',
+      'Galeotto fu il libro e chi lo scrisse',
+      'L\'amor che move il sole e l\'altre stelle',
+      'Tanto gentile e tanto onesta pare la donna mia quand\'ella altrui saluta',
+      'E quindi uscimmo a riveder le stelle',
+      'Non ragioniam di lor, ma guarda e passa',
+      // Petrarca · Canzoniere · XIV sec.
+      'Solo e pensoso i più deserti campi vo mesurando a passi tardi e lenti',
+      'Erano i capei d\'oro a l\'aura sparsi che \'n mille dolci nodi gli avolgea',
+      'Pace non trovo, et non ho da far guerra; e temo, et spero',
+      'Chiare, fresche et dolci acque, ove le belle membra pose colei',
+      // Boccaccio · Decameron · 1353
+      'Bocca basciata non perde ventura, anzi rinnuova come fa la luna',
+      // Machiavelli · Il Principe · 1513
+      'È meglio essere temuto che amato, se non si può essere l\'uno e l\'altro',
+      'Il fine giustifica i mezzi',
+      // Ariosto · Orlando Furioso · 1532
+      'Le donne, i cavallier, l\'arme, gli amori, le cortesie, l\'audaci imprese io canto',
+      // Tasso · Gerusalemme Liberata · 1581
+      'Canto l\'arme pietose e \'l capitano che \'l gran sepolcro liberò di Cristo',
+      // Foscolo · Dei Sepolcri · 1807
+      'All\'ombra de\' cipressi e dentro l\'urne confortate di pianto',
+      'A egregie cose il forte animo accendono l\'urne de\' forti',
+      // Manzoni · I Promessi Sposi · 1827
+      'Quel ramo del lago di Como, che volge a mezzogiorno, tra due catene non interrotte di monti',
+      'Addio, monti sorgenti dall\'acque, ed elevati al cielo',
+      'Carneade! Chi era costui?',
+      'Questo matrimonio non s\'ha da fare, né domani, né mai',
+      // Leopardi · Canti · 1835
+      'Sempre caro mi fu quest\'ermo colle, e questa siepe, che da tanta parte dell\'ultimo orizzonte il guardo esclude',
+      'E il naufragar m\'è dolce in questo mare',
+      'Dolce e chiara è la notte e senza vento',
+      'L\'infinita vanità del tutto',
+      'Che fai tu, luna, in ciel? dimmi, che fai, silenziosa luna?',
+      // Verga · I Malavoglia · 1881
+      'Chi cambia la vecchia per la nuova, peggio trova',
+      // Carducci · 1872
+      'T\'amo, pio bove; e mite un sentimento di vigore e di pace al cor m\'infondi',
+      // D'Annunzio · La pioggia nel pineto · 1903
+      'Taci. Su le soglie del bosco non odo parole che dici umane',
+      'Piove sulle tamerici salmastre ed arse, piove sui pini scagliosi ed irti',
+      // Pascoli · Myricae · 1891
+      'San Lorenzo, io lo so perché tanto di stelle per l\'aria tranquilla arde e cade',
+      // Pirandello
+      'Uno, nessuno e centomila',
+      'Sei personaggi in cerca d\'autore',
+      // Svevo
+      'L\'ultima sigaretta'
+    ];
+
+    // ── Colori (su fondo nero) ───────────────────────────────────────────────
+    var COLORS = [
+      '#ffffff', '#ff5247', '#ff7f50', '#ffd23f',
+      '#bef264', '#3ddc97', '#06b6d4', '#60a5fa',
+      '#a78bfa', '#f472b6', '#fb7185', '#fcd34d',
+      '#86efac', '#fdba74', '#fde68a', '#e0e7ff',
+      '#ffb4a2', '#9ae6b4', '#fda4af', '#c4b5fd'
+    ];
+
+    // ── Layout (griglia invisibile, packing) ─────────────────────────────────
+    var layout = [];
+
+    // Globals della griglia (riempiti in buildLayout, usati da animazione)
+    var GRID_COLS = 0, GRID_ROWS = 0;
+    var GRID_MARGIN = 30;
+    var CELL_W = 0, CELL_H = 0;
+    var cellOwner = []; // item ref oppure null
+
+    // Testi attualmente "occupati" (mostrati o in arrivo). Garantisce che la
+    // stessa frase non compaia mai in due box contemporaneamente.
+    var activeTexts = {};
+
+    // Timing
+    var TRANSITION_MS = 1500; // ease in + out (1.5s, ~12 frame a 8fps)
+    var REST_MIN_MS = 10000;  // 10s minimo
+    var REST_MAX_MS = 20000;  // 20s massimo
+    var lastFrameT = 0;
+
+    // Frame rate throttle (8 fps)
+    var TARGET_FPS = 8;
+    var FRAME_INTERVAL = 1000 / TARGET_FPS; // 125 ms
+    var frameAccumulator = 0;
+    var frameId = 0; // contatore di frame (sync dei clock di swap)
+
+    // Motion blur: alpha del fillRect che pulisce il textLayer
+    // più alto = scia più corta (meno persistenza)
+    var BLUR_FADE = 0.8;
+
+    // ── Easings ──────────────────────────────────────────────────────────────
+    function easeInCubic(t)    { return t * t * t; }
+    function easeOutCubic(t)   { return 1 - Math.pow(1 - t, 3); }
+    function easeInOutCubic(t) { return t < 0.5 ? 4*t*t*t : 1 - Math.pow(-2*t + 2, 3) / 2; }
+    function lerp(a, b, t)     { return a + (b - a) * t; }
+
+    function shuffle(arr) {
+      for (var i = arr.length - 1; i > 0; i--) {
+        var j = Math.floor(Math.random() * (i + 1));
+        var tmp = arr[i]; arr[i] = arr[j]; arr[j] = tmp;
+      }
+      return arr;
+    }
+
+    function wrapText(text, maxWidth) {
+      var words = text.split(' ');
+      var lines = [];
+      var current = '';
+      for (var i = 0; i < words.length; i++) {
+        var test = current ? current + ' ' + words[i] : words[i];
+        var w = tCtx.measureText(test).width;
+        if (w > maxWidth && current) {
+          lines.push(current);
+          current = words[i];
+        } else {
+          current = test;
+        }
+      }
+      if (current) lines.push(current);
+      return lines;
+    }
+
+    // Ricerca binaria della grandezza max che fa entrare il testo (con wrap)
+    // dentro una regione W×H. Ritorna -1 se nemmeno MIN_FONT_SIZE entra.
+    function findMaxFontSize(text, maxW, maxH) {
+      var low = MIN_FONT_SIZE, high = MAX_FONT_SIZE, best = -1;
+      while (low <= high) {
+        var mid = (low + high) >> 1;
+        tCtx.font = mid + 'px ' + FONT_STACK;
+        var lh = Math.round(mid * LINE_HEIGHT_MUL);
+        var lines = wrapText(text, maxW);
+
+        var overflow = false;
+        for (var i = 0; i < lines.length; i++) {
+          if (tCtx.measureText(lines[i]).width > maxW) { overflow = true; break; }
+        }
+        var totalH = lines.length * lh;
+
+        if (!overflow && totalH <= maxH) {
+          best = mid;
+          low = mid + 1;
+        } else {
+          high = mid - 1;
+        }
+      }
+      return best;
+    }
+
+    // Crea un'entry di testo (wrap + max font size per il box dato)
+    function makeEntry(text, box, pad) {
+      var contentW = box.w - pad * 2;
+      var contentH = box.h - pad * 2;
+      var size = findMaxFontSize(text, contentW, contentH);
+      if (size < MIN_FONT_SIZE) return null;
+
+      tCtx.font = size + 'px ' + FONT_STACK;
+      var lines = wrapText(text, contentW);
+
+      return {
+        text: text,
+        lines: lines,
+        size: size,
+        lineHeight: Math.round(size * LINE_HEIGHT_MUL),
+        posX: 0
+      };
+    }
+
+    // Geometria di un box a partire da anchor + span
+    function boxForSpan(anchor, w, h) {
+      return {
+        x: GRID_MARGIN + anchor.col * CELL_W,
+        y: GRID_MARGIN + anchor.row * CELL_H,
+        w: w * CELL_W,
+        h: h * CELL_H
+      };
+    }
+
+    // Durata REST in ms basata sulla lunghezza del testo (5s-12s)
+    function computeRestDuration(text) {
+      var len = text.length;
+      var minLen = 10, maxLen = 100;
+      var t = Math.max(0, Math.min(1, (len - minLen) / (maxLen - minLen)));
+      return REST_MIN_MS + t * (REST_MAX_MS - REST_MIN_MS);
+    }
+
+    // Le celle (anchor..anchor+w,h) sono libere o di proprietà di item?
+    function cellsAvailable(item, w, h) {
+      var aCol = item.anchor.col, aRow = item.anchor.row;
+      if (aCol + w > GRID_COLS) return false;
+      if (aRow + h > GRID_ROWS) return false;
+      for (var dr = 0; dr < h; dr++) {
+        for (var dc = 0; dc < w; dc++) {
+          var owner = cellOwner[(aRow + dr) * GRID_COLS + (aCol + dc)];
+          if (owner && owner !== item) return false;
+        }
+      }
+      return true;
+    }
+
+    function claimCells(item, w, h) {
+      var aCol = item.anchor.col, aRow = item.anchor.row;
+      for (var dr = 0; dr < h; dr++) {
+        for (var dc = 0; dc < w; dc++) {
+          cellOwner[(aRow + dr) * GRID_COLS + (aCol + dc)] = item;
+        }
+      }
+    }
+
+    // Rilascia le celle possedute da item che sono OLTRE lo span (w,h)
+    function releaseCellsOutside(item, w, h) {
+      var aCol = item.anchor.col, aRow = item.anchor.row;
+      for (var r = 0; r < GRID_ROWS; r++) {
+        for (var c = 0; c < GRID_COLS; c++) {
+          if (cellOwner[r * GRID_COLS + c] === item) {
+            var inSpan = (c >= aCol && c < aCol + w && r >= aRow && r < aRow + h);
+            if (!inSpan) cellOwner[r * GRID_COLS + c] = null;
+          }
+        }
+      }
+    }
+
+    // Trova lo span (anchor fissa) per il testo che MASSIMIZZA il delta dalla
+    // forma corrente. Range esteso a 5×5. Fallback su stesso span solo se
+    // nessuno diverso entra.
+    function findBestSpan(item, text) {
+      var bestDiff = null, bestDiffScore = -Infinity;
+      var bestSame = null, bestSameScore = -Infinity;
+      var maxW = Math.min(5, GRID_COLS - item.anchor.col);
+      var maxH = Math.min(5, GRID_ROWS - item.anchor.row);
+      var curW = item.span.w, curH = item.span.h;
+
+      for (var w = 1; w <= maxW; w++) {
+        for (var h = 1; h <= maxH; h++) {
+          if (!cellsAvailable(item, w, h)) continue;
+
+          var box = boxForSpan(item.anchor, w, h);
+          var cW = box.w - item.pad * 2;
+          var cH = box.h - item.pad * 2;
+          var size = findMaxFontSize(text, cW, cH);
+          if (size < MIN_FONT_SIZE) continue;
+
+          // Score: priorità a delta massimo dalla forma corrente.
+          // Il font size è secondario (tie-breaker).
+          var deltaW = Math.abs(w - curW);
+          var deltaH = Math.abs(h - curH);
+          var score = (deltaW + deltaH) * 100 + size;
+
+          var isSame = (w === curW && h === curH);
+          if (isSame) {
+            if (score > bestSameScore) { bestSameScore = score; bestSame = { w: w, h: h }; }
+          } else {
+            if (score > bestDiffScore) { bestDiffScore = score; bestDiff = { w: w, h: h }; }
+          }
+        }
+      }
+      return bestDiff || bestSame;
+    }
+
+    // Entry di testo per una regione (anchor+span). null se non entra.
+    function entryFor(text, anchor, span, pad) {
+      var box = boxForSpan(anchor, span.w, span.h);
+      return makeEntry(text, box, pad);
+    }
+
+    // Sceglie una frase NON attiva (≠ testo corrente) che entra nella regione.
+    // Ritorna {text, entry} oppure null. Aggiunge subito il testo agli attivi.
+    function pickPhraseEntry(item, anchor, span) {
+      var candidates = shuffle(PHRASES.slice());
+      var curText = item.current ? item.current.text : null;
+      for (var i = 0; i < candidates.length; i++) {
+        var t = candidates[i];
+        if (t === curText || activeTexts[t]) continue;
+        var e = entryFor(t, anchor, span, item.pad);
+        if (e) { activeTexts[t] = true; return { text: t, entry: e }; }
+      }
+      return null;
+    }
+
+    // Imposta il proprietario di tutte le celle di una regione.
+    function setRegionOwner(anchor, span, owner) {
+      for (var dr = 0; dr < span.h; dr++) {
+        for (var dc = 0; dc < span.w; dc++) {
+          cellOwner[(anchor.row + dr) * GRID_COLS + (anchor.col + dc)] = owner;
+        }
+      }
+    }
+
+    // ── Transizione IN-PLACE: il box resta sull'anchor, cambia forma+testo ────
+    function tryStartInplace(item) {
+      var candidates = shuffle(PHRASES.slice());
+      var curText = item.current.text;
+      for (var i = 0; i < candidates.length; i++) {
+        var t = candidates[i];
+        if (t === curText || activeTexts[t]) continue;
+
+        var bestSpan = findBestSpan(item, t);
+        if (!bestSpan) continue;
+
+        var newBox = boxForSpan(item.anchor, bestSpan.w, bestSpan.h);
+        var nextEntry = makeEntry(t, newBox, item.pad);
+        if (!nextEntry) continue;
+
+        activeTexts[t] = true;            // il vecchio resta attivo fino a fine
+        item.oldText = curText;
+        claimCells(item, bestSpan.w, bestSpan.h);
+
+        item.tkind = 'INPLACE';
+        item.targetSpan = bestSpan;
+        item.next = nextEntry;
+        item.next.posX = -(newBox.w - item.pad * 2); // off-screen sinistra
+        item.boxFrom = { x: item.box.x, y: item.box.y, w: item.box.w, h: item.box.h };
+        item.boxTo = newBox;
+        item.state = 'TRANSITION';
+        item.stateTime = 0;
+        return true;
+      }
+      return false;
+    }
+
+    function finishInplace(item) {
+      item.current = item.next;
+      item.current.posX = 0;
+      item.next = null;
+      item.span = item.targetSpan;
+      item.box.x = item.boxTo.x; item.box.y = item.boxTo.y;
+      item.box.w = item.boxTo.w; item.box.h = item.boxTo.h;
+      item.boxFrom = null; item.boxTo = null;
+      releaseCellsOutside(item, item.span.w, item.span.h);
+      delete activeTexts[item.oldText];
+      item.oldText = null;
+      item.targetSpan = null;
+      item.tkind = null;
+      item.state = 'REST';
+      item.stateTime = 0;
+      item.restDuration = computeRestDuration(item.current.text);
+    }
+
+    // ── Transizione SWAP: due box si scambiano regione + forma + testo ────────
+    // Garanzia anti-overlap: ogni box prima ESCE dalla sua regione (fase A),
+    // poi ENTRA nella regione dell'altro (fase B). Le due regioni sono
+    // disgiunte e la fase A precede sempre la fase B su ciascuna regione.
+    function tryStartSwap(item) {
+      var partners = [];
+      for (var i = 0; i < layout.length; i++) {
+        var p = layout[i];
+        if (p !== item && p.state === 'REST' && !p.locked) partners.push(p);
+      }
+      if (partners.length === 0) return false;
+      shuffle(partners);
+
+      for (var k = 0; k < partners.length; k++) {
+        var partner = partners[k];
+        var xA = item.anchor,    xS = item.span;
+        var yA = partner.anchor, yS = partner.span;
+
+        // item → regione di partner; partner → regione di item
+        var xPick = pickPhraseEntry(item, yA, yS);
+        if (!xPick) continue;
+        var yPick = pickPhraseEntry(partner, xA, xS);
+        if (!yPick) { delete activeTexts[xPick.text]; continue; }
+
+        // commit su entrambi (clock condiviso → fasi perfettamente sincrone)
+        item.oldText = item.current.text;
+        partner.oldText = partner.current.text;
+        var clock = { t: 0, frame: -1 };
+
+        setupSwapSide(item, partner, yA, yS, xPick.entry, clock);
+        setupSwapSide(partner, item, xA, xS, yPick.entry, clock);
+        return true;
+      }
+      return false;
+    }
+
+    function setupSwapSide(box, other, targetAnchor, targetSpan, nextEntry, clock) {
+      box.locked = true;
+      box.tkind = 'SWAP';
+      box.swapPromoted = false;
+      box.swapClock = clock;
+      box.partner = other;
+      box.targetAnchor = { col: targetAnchor.col, row: targetAnchor.row };
+      box.targetSpan = { w: targetSpan.w, h: targetSpan.h };
+      box.boxFrom = { x: box.box.x, y: box.box.y, w: box.box.w, h: box.box.h };
+      box.boxTo = boxForSpan(targetAnchor, targetSpan.w, targetSpan.h);
+      box.next = nextEntry;
+      box.next.posX = -(box.boxTo.w - box.pad * 2);
+      box.state = 'TRANSITION';
+      box.stateTime = 0;
+    }
+
+    function finishSwap(item) {
+      item.current.posX = 0;
+      item.next = null;
+      item.anchor = item.targetAnchor;
+      item.span = item.targetSpan;
+      item.box.x = item.boxTo.x; item.box.y = item.boxTo.y;
+      item.box.w = item.boxTo.w; item.box.h = item.boxTo.h;
+      setRegionOwner(item.anchor, item.span, item); // regioni disgiunte: ok
+      delete activeTexts[item.oldText];
+      item.oldText = null;
+      item.boxFrom = null; item.boxTo = null;
+      item.targetAnchor = null; item.targetSpan = null;
+      item.tkind = null; item.swapPromoted = false;
+      item.swapClock = null;
+      item.locked = false; item.partner = null;
+      item.state = 'REST';
+      item.stateTime = 0;
+      item.restDuration = computeRestDuration(item.current.text);
+    }
+
+    function buildLayout() {
+      layout = [];
+
+      GRID_COLS = 5 + Math.floor(Math.random() * 3); // 5-7
+      GRID_ROWS = 3 + Math.floor(Math.random() * 3); // 3-5
+      CELL_W = (W - GRID_MARGIN * 2) / GRID_COLS;
+      CELL_H = (H - GRID_MARGIN * 2) / GRID_ROWS;
+
+      cellOwner = new Array(GRID_COLS * GRID_ROWS);
+      for (var i = 0; i < cellOwner.length; i++) cellOwner[i] = null;
+      activeTexts = {};
+
+      var phrases = shuffle(PHRASES.slice());
+      var colors  = shuffle(COLORS.slice());
+      var pad = 14;
+
+      // Span variati con priorità a forme grandi → box più diversi, swap più
+      // drammatici (es. 3×2 ⇄ 1×2).
+      var spanOpts = [
+        [3,2],[2,3],[3,3],[2,2],[4,2],[2,1],[1,2],[3,1],[1,3],[1,1]
+      ];
+
+      function getPositions(sW, sH) {
+        var positions = [];
+        for (var r = 0; r <= GRID_ROWS - sH; r++) {
+          for (var c = 0; c <= GRID_COLS - sW; c++) {
+            var ok = true;
+            for (var dr = 0; dr < sH && ok; dr++) {
+              for (var dc = 0; dc < sW && ok; dc++) {
+                if (cellOwner[(r + dr) * GRID_COLS + (c + dc)]) ok = false;
+              }
+            }
+            if (ok) positions.push([c, r]);
+          }
+        }
+        return positions;
+      }
+
+      function place(text, pc, pr, sW, sH, colorIdx) {
+        var anchor = { col: pc, row: pr };
+        var box = boxForSpan(anchor, sW, sH);
+        var entry = makeEntry(text, box, pad);
+        if (!entry) return false;
+
+        var restDur = computeRestDuration(text);
+        var item = {
+          anchor: anchor,
+          span: { w: sW, h: sH },
+          box: { x: box.x, y: box.y, w: box.w, h: box.h }, // geometria animata
+          boxFrom: null,
+          boxTo: null,
+          targetSpan: null,
+          targetAnchor: null,
+          pad: pad,
+          color: colors[colorIdx % colors.length],
+          current: entry,
+          next: null,
+          oldText: null,
+          tkind: null,        // 'INPLACE' | 'SWAP' durante la transizione
+          locked: false,      // true mentre è impegnato in uno swap
+          swapPromoted: false,
+          swapClock: null,
+          partner: null,
+          state: 'REST',
+          // Sfasa molto i timer iniziali così le transizioni non partono tutte
+          // insieme (più vita, swap distribuiti nel tempo).
+          stateTime: Math.random() * restDur,
+          restDuration: restDur
+        };
+
+        activeTexts[text] = true;
+        layout.push(item);
+
+        for (var dr = 0; dr < sH; dr++) {
+          for (var dc = 0; dc < sW; dc++) {
+            cellOwner[(pr + dr) * GRID_COLS + (pc + dc)] = item;
+          }
+        }
+        return true;
+      }
+
+      var colorIdx = 0;
+
+      // PASS 1: piazza ogni frase con span variati (priorità a forme grandi/varie)
+      for (var p = 0; p < phrases.length; p++) {
+        var text = phrases[p];
+        var spans = shuffle(spanOpts.slice());
+        for (var so = 0; so < spans.length; so++) {
+          var sW = Math.min(spans[so][0], GRID_COLS);
+          var sH = Math.min(spans[so][1], GRID_ROWS);
+          var positions = getPositions(sW, sH);
+          if (positions.length === 0) continue;
+          var pos = positions[Math.floor(Math.random() * positions.length)];
+          if (place(text, pos[0], pos[1], sW, sH, colorIdx)) {
+            colorIdx++;
+            break;
+          }
+        }
+      }
+
+      // PASS 2: riempie OGNI cella residua con un box 1×1, usando SOLO frasi
+      // ancora libere (mai duplicate) che entrano nella cella → griglia piena
+      // e nessuna frase ripetuta all'avvio.
+      var remaining = PHRASES.filter(function (ph) { return !activeTexts[ph]; });
+      shuffle(remaining);
+
+      var safety = 0;
+      var blockedMarker = {};
+      while (safety++ < 300) {
+        var empties = getPositions(1, 1);
+        if (empties.length === 0) break;
+        var ep = empties[Math.floor(Math.random() * empties.length)];
+
+        // Cerca tra le frasi rimaste la prima che entra in questa cella 1×1.
+        var placedHere = false;
+        for (var ri = 0; ri < remaining.length; ri++) {
+          if (place(remaining[ri], ep[0], ep[1], 1, 1, colorIdx)) {
+            colorIdx++;
+            remaining.splice(ri, 1);
+            placedHere = true;
+            break;
+          }
+        }
+        if (!placedHere) cellOwner[ep[1] * GRID_COLS + ep[0]] = blockedMarker;
+      }
+      // pulisci marker
+      for (var ci = 0; ci < cellOwner.length; ci++) {
+        if (cellOwner[ci] === blockedMarker) cellOwner[ci] = null;
+      }
+    }
+
+    // Stato-macchina per box: REST → TRANSITION → REST → ...
+    function updateAnimation(dtMs) {
+      frameId++;
+      for (var i = 0; i < layout.length; i++) {
+        var item = layout[i];
+        item.stateTime += dtMs;
+
+        if (item.state === 'REST') {
+          if (item.locked) continue; // in attesa di un partner di swap
+          if (item.stateTime >= item.restDuration) {
+            // Preferisci lo SWAP (più movimento), poi il cambio in-place.
+            var ok = false;
+            if (Math.random() < 0.7) ok = tryStartSwap(item);
+            if (!ok) ok = tryStartInplace(item);
+            if (!ok) ok = tryStartSwap(item);
+            if (!ok) item.restDuration += 1000; // riprova tra ~1s
+          }
+        } else if (item.tkind === 'SWAP') {
+          // Due fasi: A = uscita dalla vecchia regione, B = entrata nella nuova.
+          // Clock condiviso col partner: avanza una sola volta per frame, così
+          // i due box attraversano il confine A→B nello STESSO frame (mai
+          // sovrapposti nella regione comune).
+          var clock = item.swapClock;
+          if (clock.frame !== frameId) { clock.t += dtMs; clock.frame = frameId; }
+          var ts = Math.min(1, clock.t / TRANSITION_MS);
+          if (ts < 0.5) {
+            var te = ts / 0.5;
+            item.box.x = item.boxFrom.x; item.box.y = item.boxFrom.y;
+            item.box.w = item.boxFrom.w; item.box.h = item.boxFrom.h;
+            var cwOld = item.boxFrom.w - item.pad * 2;
+            item.current.posX = cwOld * easeOutCubic(te); // esce a destra
+          } else {
+            if (!item.swapPromoted) {
+              item.swapPromoted = true;
+              item.current = item.next; // il nuovo testo diventa quello corrente
+              item.next = null;
+              item.box.x = item.boxTo.x; item.box.y = item.boxTo.y;
+              item.box.w = item.boxTo.w; item.box.h = item.boxTo.h;
+            }
+            var ten = (ts - 0.5) / 0.5;
+            var cwNew = item.boxTo.w - item.pad * 2;
+            item.current.posX = -cwNew + cwNew * easeInCubic(ten); // entra da sx
+          }
+          if (ts >= 1) finishSwap(item);
+        } else { // TRANSITION in-place
+          var t = Math.min(1, item.stateTime / TRANSITION_MS);
+
+          var contentWold = item.boxFrom.w - item.pad * 2;
+          var contentWnew = item.boxTo.w   - item.pad * 2;
+
+          item.current.posX = contentWold * easeOutCubic(t); // esce a destra
+          item.next.posX    = -contentWnew + contentWnew * easeInCubic(t); // entra sx
+
+          // Geometria del box anima smooth (in/out)
+          var eg = easeInOutCubic(t);
+          item.box.x = lerp(item.boxFrom.x, item.boxTo.x, eg);
+          item.box.y = lerp(item.boxFrom.y, item.boxTo.y, eg);
+          item.box.w = lerp(item.boxFrom.w, item.boxTo.w, eg);
+          item.box.h = lerp(item.boxFrom.h, item.boxTo.h, eg);
+
+          if (t >= 1) finishInplace(item);
+        }
+      }
+    }
+
+    buildLayout();
+
+    // ── Cambio temporizzato ──────────────────────────────────────────────────
+    var PLAY_FRAMES   = 900; // ~15s a 60fps
+    var playFrame     = 0;
+    var fadeFrames    = 0;
+    var FADE_DURATION = 24;
+
+    function updateTransition() {
+      // Il rebuild periodico è disattivato: i testi cambiano da soli grazie
+      // al motion (entrano da sinistra, escono a destra). Lascio solo il
+      // decremento del fade per sicurezza (oggi non viene mai attivato).
+      if (fadeFrames > 0) fadeFrames--;
+    }
+
+    // ── Eraser (mano) ────────────────────────────────────────────────────────
+    var ERASER_R = 38;
+    var lastErasePos = null;
+    var handPath = []; // {x,y} oppure null (pen-up)
+
+    function stampErase(lx, ly) {
+      mCtx.globalCompositeOperation = 'destination-out';
+      var g = mCtx.createRadialGradient(lx, ly, 0, lx, ly, ERASER_R);
+      g.addColorStop(0,    'rgba(0,0,0,0.22)');
+      g.addColorStop(0.45, 'rgba(0,0,0,0.12)');
+      g.addColorStop(0.80, 'rgba(0,0,0,0.04)');
+      g.addColorStop(1,    'rgba(0,0,0,0)');
+      mCtx.fillStyle = g;
+      mCtx.beginPath();
+      mCtx.arc(lx, ly, ERASER_R, 0, Math.PI * 2);
+      mCtx.fill();
+      mCtx.globalCompositeOperation = 'source-over';
+    }
+
+    function erase(landmarks) {
+      var lx = (1 - landmarks[8].x) * W;
+      var ly = landmarks[8].y * H;
+      if (lastErasePos) {
+        var dx = lx - lastErasePos.x;
+        var dy = ly - lastErasePos.y;
+        var dist = Math.sqrt(dx * dx + dy * dy);
+        var step = ERASER_R * 0.4;
+        var n = Math.max(1, Math.ceil(dist / step));
+        for (var s = 1; s <= n; s++) {
+          var t = s / n;
+          stampErase(lastErasePos.x + dx * t, lastErasePos.y + dy * t);
+        }
+      } else {
+        stampErase(lx, ly);
+      }
+      lastErasePos = { x: lx, y: ly };
+      handPath.push({ x: lx, y: ly });
+    }
+
+    // ── Draw ─────────────────────────────────────────────────────────────────
+    function drawText() {
+      // Motion blur: invece di clear netto, fade del textLayer
+      // → l'immagine precedente resta a alpha (1 - BLUR_FADE) e fa da "scia"
+      tCtx.fillStyle = 'rgba(0, 0, 0, ' + BLUR_FADE + ')';
+      tCtx.fillRect(0, 0, W, H);
+
+      tCtx.textBaseline = 'top';
+
+      for (var i = 0; i < layout.length; i++) {
+        var item = layout[i];
+
+        // Clip al box (animato durante TRANSITION)
+        tCtx.save();
+        tCtx.beginPath();
+        tCtx.rect(item.box.x, item.box.y, item.box.w, item.box.h);
+        tCtx.clip();
+
+        tCtx.fillStyle = item.color;
+
+        var baseX = item.box.x + item.pad;
+        var baseY = item.box.y + item.pad;
+
+        // Current entry (esce a destra durante TRANSITION, ferma in REST)
+        if (item.current) {
+          tCtx.font = item.current.size + 'px ' + FONT_STACK;
+          var dx = baseX + item.current.posX;
+          for (var k = 0; k < item.current.lines.length; k++) {
+            tCtx.fillText(item.current.lines[k], dx, baseY + k * item.current.lineHeight);
+          }
+        }
+
+        // Next entry (entra da sinistra solo durante TRANSITION)
+        if (item.next) {
+          tCtx.font = item.next.size + 'px ' + FONT_STACK;
+          var dx2 = baseX + item.next.posX;
+          for (var k2 = 0; k2 < item.next.lines.length; k2++) {
+            tCtx.fillText(item.next.lines[k2], dx2, baseY + k2 * item.next.lineHeight);
+          }
+        }
+
+        tCtx.restore();
+      }
+    }
+
+    function compositeText() {
+      ctx.drawImage(textLayer, 0, 0);
+      if (fadeFrames > 0) {
+        var alpha = fadeFrames / FADE_DURATION;
+        ctx.fillStyle = 'rgba(0,0,0,' + alpha + ')';
+        ctx.fillRect(0, 0, W, H);
+      }
+    }
+
+    function render() {
+      requestAnimationFrame(render);
+      var now = performance.now();
+      var dt = lastFrameT ? Math.min(200, now - lastFrameT) : FRAME_INTERVAL;
+      lastFrameT = now;
+
+      // Throttle a TARGET_FPS: salta i frame finché non passa l'intervallo
+      frameAccumulator += dt;
+      if (frameAccumulator < FRAME_INTERVAL) return;
+      var stepDt = frameAccumulator;
+      frameAccumulator = 0;
+
+      updateTransition();
+      updateAnimation(stepDt);
+      drawText();
+      ctx.clearRect(0, 0, W, H);
+      compositeText();
+      ctx.drawImage(maskLayer, 0, 0);
+    }
+
+    // ── MediaPipe Hands ──────────────────────────────────────────────────────
+    var video   = document.getElementById('video');
+    var loading = document.getElementById('loading');
+    var ready   = false;
+
+    var hands = new Hands({
+      locateFile: function (f) {
+        return 'https://cdn.jsdelivr.net/npm/@mediapipe/hands/' + f;
+      }
+    });
+    hands.setOptions({
+      maxNumHands: 1, modelComplexity: 1,
+      minDetectionConfidence: 0.7, minTrackingConfidence: 0.5
+    });
+    hands.onResults(function (results) {
+      if (!ready) { ready = true; loading.style.display = 'none'; }
+      if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
+        erase(results.multiHandLandmarks[0]);
+      } else {
+        lastErasePos = null;
+        if (handPath.length > 0 && handPath[handPath.length - 1] !== null) {
+          handPath.push(null);
+        }
+      }
+    });
+
+    new Camera(video, {
+      onFrame: function () { return hands.send({ image: video }); },
+      width: 1280, height: 720
+    }).start();
+
+    // ── SVG export del percorso mano ─────────────────────────────────────────
+    function buildPathData() {
+      var d = '';
+      var started = false;
+      for (var i = 0; i < handPath.length; i++) {
+        var p = handPath[i];
+        if (p === null) { started = false; continue; }
+        if (!started) {
+          d += 'M' + p.x.toFixed(2) + ',' + p.y.toFixed(2);
+          started = true;
+        } else {
+          d += ' L' + p.x.toFixed(2) + ',' + p.y.toFixed(2);
+        }
+      }
+      return d;
+    }
+
+    function exportSVG() {
+      var d = buildPathData();
+      if (!d) return;
+      var svg =
+        '<?xml version="1.0" encoding="UTF-8"?>\n' +
+        '<svg xmlns="http://www.w3.org/2000/svg" ' +
+        'viewBox="0 0 ' + W + ' ' + H + '" ' +
+        'width="' + W + '" height="' + H + '">' +
+        '<path d="' + d + '" fill="none" stroke="black" stroke-width="0.5" ' +
+        'stroke-linejoin="round" stroke-linecap="round"/>' +
+        '</svg>';
+      var blob = new Blob([svg], { type: 'image/svg+xml' });
+      var url  = URL.createObjectURL(blob);
+      var a    = document.createElement('a');
+      a.href = url;
+      a.download = 'hand-path-' + new Date().toISOString().replace(/[:.]/g, '-') + '.svg';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+    }
+
+    function clearPath() {
+      handPath.length = 0;
+      lastErasePos = null;
+      mCtx.globalCompositeOperation = 'source-over';
+      mCtx.fillStyle = '#000';
+      mCtx.fillRect(0, 0, W, H);
+    }
+
+    function revealAll() {
+      // Rimuove completamente il velo nero (mask trasparente)
+      mCtx.globalCompositeOperation = 'source-over';
+      mCtx.clearRect(0, 0, W, H);
+    }
+
+    document.getElementById('btnSave').addEventListener('click', exportSVG);
+    document.getElementById('btnClear').addEventListener('click', clearPath);
+    document.getElementById('btnReveal').addEventListener('click', revealAll);
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 's' || e.key === 'S') exportSVG();
+      if (e.key === 'c' || e.key === 'C') clearPath();
+      if (e.key === 'r' || e.key === 'R') revealAll();
+    });
+
+    requestAnimationFrame(render);
+  })();
+  </script>
+</body>
+</html>
