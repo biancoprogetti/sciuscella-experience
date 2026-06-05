@@ -45,7 +45,9 @@
   <div id="ui">
     <button id="btnReveal" title="Svela tutto (R)">Reveal</button>
     <button id="btnClear"  title="Cancella percorso (C)">Clear</button>
-    <button id="btnSave"   title="Esporta SVG (S)">↓ SVG</button>
+    <button id="btnSaveL"   title="Esporta SVG mano sinistra">↓ L</button>
+    <button id="btnSaveR"   title="Esporta SVG mano destra">↓ R</button>
+    <button id="btnSaveAll" title="Esporta SVG entrambe (S)">↓ ALL</button>
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
@@ -703,9 +705,10 @@
 
     // ── Eraser (mani — multi-hand) ───────────────────────────────────────────
     var ERASER_R = 38;
-    var lastErasePos = {};   // mappa { 'Left': {x,y}, 'Right': {x,y} }
-    var handPath = [];       // {x,y} oppure null (pen-up). Discontinuità per ogni
-                             // mano che si perde o si stacca.
+    var lastErasePos = {};      // { 'Left': {x,y}, 'Right': {x,y} }
+    var strokes = [];           // [{ label, points: [{x,y}, ...] }, ...]
+    var currentStroke = {};     // { 'Left': <stroke>, 'Right': <stroke> }
+    var MIN_PATH_DIST = 3;      // px minimi tra punti consecutivi REGISTRATI
 
     function stampErase(lx, ly) {
       mCtx.globalCompositeOperation = 'destination-out';
@@ -735,15 +738,21 @@
           var t = s / n;
           stampErase(prev.x + dx * t, prev.y + dy * t);
         }
+        var cs = currentStroke[label];
+        if (cs) {
+          var lp = cs.points[cs.points.length - 1];
+          var px = lx - lp.x, py = ly - lp.y;
+          if (px * px + py * py >= MIN_PATH_DIST * MIN_PATH_DIST) {
+            cs.points.push({ x: lx, y: ly });
+          }
+        }
       } else {
         stampErase(lx, ly);
-        // pen-up tra mani diverse → null nel path
-        if (handPath.length > 0 && handPath[handPath.length - 1] !== null) {
-          handPath.push(null);
-        }
+        var s = { label: label, points: [{ x: lx, y: ly }] };
+        currentStroke[label] = s;
+        strokes.push(s);
       }
       lastErasePos[label] = { x: lx, y: ly };
-      handPath.push({ x: lx, y: ly });
     }
 
     // ── Draw ─────────────────────────────────────────────────────────────────
@@ -849,18 +858,14 @@
         erase(lm[i], label);
       }
 
-      // Mani che hanno smesso di essere viste questo frame → reset di lastErasePos
-      // per quella label (così la prossima detection non collega il vecchio punto)
-      var pathBroken = false;
+      // Mani che hanno smesso di essere viste → chiude la loro stroke corrente
       for (var key in lastErasePos) {
         if (!seen[key] && lastErasePos[key]) {
           lastErasePos[key] = null;
           delete lastErasePos[key];
-          pathBroken = true;
+          currentStroke[key] = null;
+          delete currentStroke[key];
         }
-      }
-      if (pathBroken && handPath.length > 0 && handPath[handPath.length - 1] !== null) {
-        handPath.push(null);
       }
     });
 
@@ -869,39 +874,72 @@
       width: 1280, height: 720
     }).start();
 
-    // ── SVG export del percorso mano ─────────────────────────────────────────
-    function buildPathData() {
-      var d = '';
-      var started = false;
-      for (var i = 0; i < handPath.length; i++) {
-        var p = handPath[i];
-        if (p === null) { started = false; continue; }
-        if (!started) {
-          d += 'M' + p.x.toFixed(2) + ',' + p.y.toFixed(2);
-          started = true;
-        } else {
-          d += ' L' + p.x.toFixed(2) + ',' + p.y.toFixed(2);
+    // ── Smoothing della stroke: 3 passi WMA + Catmull-Rom → Bezier ──────────
+    var SMOOTH_PASSES = 3;
+
+    function smoothPoints(points, passes) {
+      if (points.length < 3) return points.slice();
+      var result = points.slice();
+      for (var p = 0; p < passes; p++) {
+        var next = [result[0]];
+        for (var i = 1; i < result.length - 1; i++) {
+          next.push({
+            x: (result[i-1].x + 2 * result[i].x + result[i+1].x) / 4,
+            y: (result[i-1].y + 2 * result[i].y + result[i+1].y) / 4
+          });
         }
+        next.push(result[result.length - 1]);
+        result = next;
+      }
+      return result;
+    }
+
+    function strokeToSmoothPath(pts) {
+      if (!pts || pts.length === 0) return '';
+      if (pts.length === 1) return 'M' + pts[0].x.toFixed(2) + ',' + pts[0].y.toFixed(2);
+      var d = 'M' + pts[0].x.toFixed(2) + ',' + pts[0].y.toFixed(2);
+      if (pts.length === 2) return d + ' L' + pts[1].x.toFixed(2) + ',' + pts[1].y.toFixed(2);
+      for (var i = 0; i < pts.length - 1; i++) {
+        var p0 = pts[Math.max(0, i - 1)];
+        var p1 = pts[i];
+        var p2 = pts[i + 1];
+        var p3 = pts[Math.min(pts.length - 1, i + 2)];
+        var cp1x = p1.x + (p2.x - p0.x) / 6;
+        var cp1y = p1.y + (p2.y - p0.y) / 6;
+        var cp2x = p2.x - (p3.x - p1.x) / 6;
+        var cp2y = p2.y - (p3.y - p1.y) / 6;
+        d += ' C' + cp1x.toFixed(2) + ',' + cp1y.toFixed(2) +
+             ' '  + cp2x.toFixed(2) + ',' + cp2y.toFixed(2) +
+             ' '  + p2.x.toFixed(2)  + ',' + p2.y.toFixed(2);
       }
       return d;
     }
 
-    function exportSVG() {
-      var d = buildPathData();
-      if (!d) return;
-      var svg =
-        '<?xml version="1.0" encoding="UTF-8"?>\n' +
-        '<svg xmlns="http://www.w3.org/2000/svg" ' +
-        'viewBox="0 0 ' + W + ' ' + H + '" ' +
-        'width="' + W + '" height="' + H + '">' +
-        '<path d="' + d + '" fill="none" stroke="black" stroke-width="0.5" ' +
-        'stroke-linejoin="round" stroke-linecap="round"/>' +
-        '</svg>';
+    // ── SVG export — per mano (Left/Right) o per tutte ('all') ──────────────
+    function exportSvgFor(labelFilter) {
+      var pickedStrokes = labelFilter === 'all'
+        ? strokes
+        : strokes.filter(function (s) { return s.label === labelFilter; });
+      pickedStrokes = pickedStrokes.filter(function (s) { return s.points.length >= 2; });
+      if (pickedStrokes.length === 0) return;
+
+      var pathEls = pickedStrokes.map(function (s) {
+        var smoothed = smoothPoints(s.points, SMOOTH_PASSES);
+        var d = strokeToSmoothPath(smoothed);
+        return '<path d="' + d + '" fill="none" stroke="black" stroke-width="0.5" ' +
+               'stroke-linejoin="round" stroke-linecap="round"/>';
+      }).join('');
+
+      var svg = '<?xml version="1.0" encoding="UTF-8"?>\n' +
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + W + ' ' + H + '" ' +
+        'width="' + W + '" height="' + H + '">' + pathEls + '</svg>';
+
       var blob = new Blob([svg], { type: 'image/svg+xml' });
       var url  = URL.createObjectURL(blob);
       var a    = document.createElement('a');
       a.href = url;
-      a.download = 'hand-path-' + new Date().toISOString().replace(/[:.]/g, '-') + '.svg';
+      a.download = 'hand-path-' + labelFilter +
+                   '-' + new Date().toISOString().replace(/[:.]/g, '-') + '.svg';
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -909,7 +947,8 @@
     }
 
     function clearPath() {
-      handPath.length = 0;
+      strokes.length = 0;
+      currentStroke = {};
       lastErasePos = {};
       mCtx.globalCompositeOperation = 'source-over';
       mCtx.fillStyle = '#000';
@@ -922,11 +961,13 @@
       mCtx.clearRect(0, 0, W, H);
     }
 
-    document.getElementById('btnSave').addEventListener('click', exportSVG);
+    document.getElementById('btnSaveL').addEventListener('click', function () { exportSvgFor('Left'); });
+    document.getElementById('btnSaveR').addEventListener('click', function () { exportSvgFor('Right'); });
+    document.getElementById('btnSaveAll').addEventListener('click', function () { exportSvgFor('all'); });
     document.getElementById('btnClear').addEventListener('click', clearPath);
     document.getElementById('btnReveal').addEventListener('click', revealAll);
     document.addEventListener('keydown', function (e) {
-      if (e.key === 's' || e.key === 'S') exportSVG();
+      if (e.key === 's' || e.key === 'S') exportSvgFor('all');
       if (e.key === 'c' || e.key === 'C') clearPath();
       if (e.key === 'r' || e.key === 'R') revealAll();
     });

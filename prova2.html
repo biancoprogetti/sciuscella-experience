@@ -49,7 +49,9 @@
   <div id="ui">
     <button id="btnReveal" title="Svela tutto (R)">Reveal</button>
     <button id="btnClear"  title="Cancella percorso (C)">Clear</button>
-    <button id="btnSave"   title="Esporta SVG (S)">↓ SVG</button>
+    <button id="btnSaveL"   title="Esporta SVG mano sinistra">↓ L</button>
+    <button id="btnSaveR"   title="Esporta SVG mano destra">↓ R</button>
+    <button id="btnSaveAll" title="Esporta SVG entrambe le mani (S)">↓ ALL</button>
     <button id="btnA4"     title="Genera poster A4 PNG trasparente (A)">↓ A4</button>
   </div>
 
@@ -701,8 +703,13 @@
 
     // ── Eraser (mani — multi-hand) ───────────────────────────────────────────
     var ERASER_R = 38;
-    var lastErasePos = {};   // { 'Left': {x,y}, 'Right': {x,y} }
-    var handPath = [];       // {x,y} oppure null (pen-up per ogni mano persa)
+    var lastErasePos = {};      // { 'Left': {x,y}, 'Right': {x,y} }
+
+    // Storage path: lista di "strokes" indipendenti, ognuna marcata con la label
+    // della mano che l'ha disegnata. currentStroke[label] punta all'oggetto attivo.
+    var strokes = [];           // [{ label: 'Left', points: [{x,y}, ...] }, ...]
+    var currentStroke = {};     // { 'Left': <stroke obj>, 'Right': <stroke obj> }
+    var MIN_PATH_DIST = 3;      // px minimi tra punti consecutivi REGISTRATI
 
     function stampErase(lx, ly) {
       mCtx.globalCompositeOperation = 'destination-out';
@@ -723,6 +730,7 @@
       var ly = landmarks[8].y * H;
       var prev = lastErasePos[label];
       if (prev) {
+        // Interpolazione fra punti per evitare buchi nella cancellazione visiva
         var dx = lx - prev.x, dy = ly - prev.y;
         var dist = Math.sqrt(dx * dx + dy * dy);
         var step = ERASER_R * 0.4;
@@ -731,14 +739,23 @@
           var t = s / n;
           stampErase(prev.x + dx * t, prev.y + dy * t);
         }
+        // Registrazione path: salta i punti troppo vicini (riduce rumore SVG)
+        var cs = currentStroke[label];
+        if (cs) {
+          var lp = cs.points[cs.points.length - 1];
+          var px = lx - lp.x, py = ly - lp.y;
+          if (px * px + py * py >= MIN_PATH_DIST * MIN_PATH_DIST) {
+            cs.points.push({ x: lx, y: ly });
+          }
+        }
       } else {
         stampErase(lx, ly);
-        if (handPath.length > 0 && handPath[handPath.length - 1] !== null) {
-          handPath.push(null);
-        }
+        // Nuova stroke per questa mano (pen-down)
+        var s = { label: label, points: [{ x: lx, y: ly }] };
+        currentStroke[label] = s;
+        strokes.push(s);
       }
       lastErasePos[label] = { x: lx, y: ly };
-      handPath.push({ x: lx, y: ly });
     }
 
     // ── Ticker: scritta che scorre lentamente in basso (titolo) ──────────────
@@ -826,17 +843,14 @@
         erase(lm[i], label);
       }
 
-      // Mani sparite questo frame → reset di lastErasePos per quella label
-      var pathBroken = false;
+      // Mani sparite questo frame → chiude la loro stroke corrente
       for (var key in lastErasePos) {
         if (!seen[key] && lastErasePos[key]) {
           lastErasePos[key] = null;
           delete lastErasePos[key];
-          pathBroken = true;
+          currentStroke[key] = null;
+          delete currentStroke[key];
         }
-      }
-      if (pathBroken && handPath.length > 0 && handPath[handPath.length - 1] !== null) {
-        handPath.push(null);
       }
     });
 
@@ -846,34 +860,88 @@
     }).start();
 
     // ── Export SVG del percorso mano ─────────────────────────────────────────
-    function buildPathData() {
-      var d = '', started = false;
-      for (var i = 0; i < handPath.length; i++) {
-        var p = handPath[i];
-        if (p === null) { started = false; continue; }
-        if (!started) { d += 'M' + p.x.toFixed(2) + ',' + p.y.toFixed(2); started = true; }
-        else d += ' L' + p.x.toFixed(2) + ',' + p.y.toFixed(2);
+    // ── Smoothing della stroke: 3 passi di media pesata + Catmull-Rom Bezier ─
+    var SMOOTH_PASSES = 3;
+
+    function smoothPoints(points, passes) {
+      if (points.length < 3) return points.slice();
+      var result = points.slice();
+      for (var p = 0; p < passes; p++) {
+        var next = [result[0]];
+        for (var i = 1; i < result.length - 1; i++) {
+          next.push({
+            x: (result[i-1].x + 2 * result[i].x + result[i+1].x) / 4,
+            y: (result[i-1].y + 2 * result[i].y + result[i+1].y) / 4
+          });
+        }
+        next.push(result[result.length - 1]);
+        result = next;
+      }
+      return result;
+    }
+
+    // Catmull-Rom (tensione 0) → cubic Bezier per ogni segmento
+    function strokeToSmoothPath(pts) {
+      if (!pts || pts.length === 0) return '';
+      if (pts.length === 1) {
+        return 'M' + pts[0].x.toFixed(2) + ',' + pts[0].y.toFixed(2);
+      }
+      var d = 'M' + pts[0].x.toFixed(2) + ',' + pts[0].y.toFixed(2);
+      if (pts.length === 2) {
+        return d + ' L' + pts[1].x.toFixed(2) + ',' + pts[1].y.toFixed(2);
+      }
+      for (var i = 0; i < pts.length - 1; i++) {
+        var p0 = pts[Math.max(0, i - 1)];
+        var p1 = pts[i];
+        var p2 = pts[i + 1];
+        var p3 = pts[Math.min(pts.length - 1, i + 2)];
+        var cp1x = p1.x + (p2.x - p0.x) / 6;
+        var cp1y = p1.y + (p2.y - p0.y) / 6;
+        var cp2x = p2.x - (p3.x - p1.x) / 6;
+        var cp2y = p2.y - (p3.y - p1.y) / 6;
+        d += ' C' + cp1x.toFixed(2) + ',' + cp1y.toFixed(2) +
+             ' '  + cp2x.toFixed(2) + ',' + cp2y.toFixed(2) +
+             ' '  + p2.x.toFixed(2)  + ',' + p2.y.toFixed(2);
       }
       return d;
     }
-    function exportSVG() {
-      var d = buildPathData();
-      if (!d) return;
+
+    // ── Export SVG: per mano singola o tutte e due ───────────────────────────
+    // labelFilter: 'Left' | 'Right' | 'all'
+    function exportSvgFor(labelFilter) {
+      var pickedStrokes = labelFilter === 'all'
+        ? strokes
+        : strokes.filter(function (s) { return s.label === labelFilter; });
+
+      // Solo stroke che hanno almeno 2 punti
+      pickedStrokes = pickedStrokes.filter(function (s) { return s.points.length >= 2; });
+      if (pickedStrokes.length === 0) return;
+
+      var pathEls = pickedStrokes.map(function (s) {
+        var smoothed = smoothPoints(s.points, SMOOTH_PASSES);
+        var d = strokeToSmoothPath(smoothed);
+        return '<path d="' + d + '" fill="none" stroke="black" stroke-width="0.5" ' +
+               'stroke-linejoin="round" stroke-linecap="round"/>';
+      }).join('');
+
       var svg = '<?xml version="1.0" encoding="UTF-8"?>\n' +
         '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + W + ' ' + H + '" ' +
-        'width="' + W + '" height="' + H + '">' +
-        '<path d="' + d + '" fill="none" stroke="black" stroke-width="0.5" ' +
-        'stroke-linejoin="round" stroke-linecap="round"/></svg>';
+        'width="' + W + '" height="' + H + '">' + pathEls + '</svg>';
+
       var blob = new Blob([svg], { type: 'image/svg+xml' });
       var url = URL.createObjectURL(blob);
       var a = document.createElement('a');
       a.href = url;
-      a.download = 'prova2-path-' + new Date().toISOString().replace(/[:.]/g, '-') + '.svg';
+      a.download = 'prova2-path-' + labelFilter +
+                   '-' + new Date().toISOString().replace(/[:.]/g, '-') + '.svg';
       document.body.appendChild(a); a.click(); document.body.removeChild(a);
       setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
     }
+
     function clearPath() {
-      handPath.length = 0; lastErasePos = {};
+      strokes.length = 0;
+      currentStroke = {};
+      lastErasePos = {};
       mCtx.globalCompositeOperation = 'source-over';
       mCtx.fillStyle = PAGE_BG; mCtx.fillRect(0, 0, W, H);
     }
@@ -1033,12 +1101,14 @@
       }, 'image/png');
     }
 
-    document.getElementById('btnSave').addEventListener('click', exportSVG);
+    document.getElementById('btnSaveL').addEventListener('click', function () { exportSvgFor('Left'); });
+    document.getElementById('btnSaveR').addEventListener('click', function () { exportSvgFor('Right'); });
+    document.getElementById('btnSaveAll').addEventListener('click', function () { exportSvgFor('all'); });
     document.getElementById('btnClear').addEventListener('click', clearPath);
     document.getElementById('btnReveal').addEventListener('click', revealAll);
     document.getElementById('btnA4').addEventListener('click', exportA4);
     document.addEventListener('keydown', function (e) {
-      if (e.key === 's' || e.key === 'S') exportSVG();
+      if (e.key === 's' || e.key === 'S') exportSvgFor('all');
       if (e.key === 'c' || e.key === 'C') clearPath();
       if (e.key === 'r' || e.key === 'R') revealAll();
       if (e.key === 'a' || e.key === 'A') exportA4();
