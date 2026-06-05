@@ -699,10 +699,10 @@
       setTimeout(buildOnce, 3500); // fallback se i font tardano/non arrivano
     })();
 
-    // ── Eraser (mano / passi) ────────────────────────────────────────────────
+    // ── Eraser (mani — multi-hand) ───────────────────────────────────────────
     var ERASER_R = 38;
-    var lastErasePos = null;
-    var handPath = [];
+    var lastErasePos = {};   // { 'Left': {x,y}, 'Right': {x,y} }
+    var handPath = [];       // {x,y} oppure null (pen-up per ogni mano persa)
 
     function stampErase(lx, ly) {
       mCtx.globalCompositeOperation = 'destination-out';
@@ -718,20 +718,26 @@
       mCtx.globalCompositeOperation = 'source-over';
     }
 
-    function erase(landmarks) {
+    function erase(landmarks, label) {
       var lx = (1 - landmarks[8].x) * W;
       var ly = landmarks[8].y * H;
-      if (lastErasePos) {
-        var dx = lx - lastErasePos.x, dy = ly - lastErasePos.y;
+      var prev = lastErasePos[label];
+      if (prev) {
+        var dx = lx - prev.x, dy = ly - prev.y;
         var dist = Math.sqrt(dx * dx + dy * dy);
         var step = ERASER_R * 0.4;
         var n = Math.max(1, Math.ceil(dist / step));
         for (var s = 1; s <= n; s++) {
           var t = s / n;
-          stampErase(lastErasePos.x + dx * t, lastErasePos.y + dy * t);
+          stampErase(prev.x + dx * t, prev.y + dy * t);
         }
-      } else stampErase(lx, ly);
-      lastErasePos = { x: lx, y: ly };
+      } else {
+        stampErase(lx, ly);
+        if (handPath.length > 0 && handPath[handPath.length - 1] !== null) {
+          handPath.push(null);
+        }
+      }
+      lastErasePos[label] = { x: lx, y: ly };
       handPath.push({ x: lx, y: ly });
     }
 
@@ -803,16 +809,34 @@
       locateFile: function (f) { return 'https://cdn.jsdelivr.net/npm/@mediapipe/hands/' + f; }
     });
     hands.setOptions({
-      maxNumHands: 1, modelComplexity: 1,
+      maxNumHands: 2, modelComplexity: 1,
       minDetectionConfidence: 0.7, minTrackingConfidence: 0.5
     });
     hands.onResults(function (results) {
       if (!ready) { ready = true; loading.style.display = 'none'; }
-      if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-        erase(results.multiHandLandmarks[0]);
-      } else {
-        lastErasePos = null;
-        if (handPath.length > 0 && handPath[handPath.length - 1] !== null) handPath.push(null);
+
+      var lm = results.multiHandLandmarks || [];
+      var hd = results.multiHandedness || [];
+
+      // Per ogni mano rilevata: chiama erase con la label come ID stabile
+      var seen = {};
+      for (var i = 0; i < lm.length; i++) {
+        var label = (hd[i] && hd[i].label) ? hd[i].label : ('H' + i);
+        seen[label] = true;
+        erase(lm[i], label);
+      }
+
+      // Mani sparite questo frame → reset di lastErasePos per quella label
+      var pathBroken = false;
+      for (var key in lastErasePos) {
+        if (!seen[key] && lastErasePos[key]) {
+          lastErasePos[key] = null;
+          delete lastErasePos[key];
+          pathBroken = true;
+        }
+      }
+      if (pathBroken && handPath.length > 0 && handPath[handPath.length - 1] !== null) {
+        handPath.push(null);
       }
     });
 
@@ -849,7 +873,7 @@
       setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
     }
     function clearPath() {
-      handPath.length = 0; lastErasePos = null;
+      handPath.length = 0; lastErasePos = {};
       mCtx.globalCompositeOperation = 'source-over';
       mCtx.fillStyle = PAGE_BG; mCtx.fillRect(0, 0, W, H);
     }
