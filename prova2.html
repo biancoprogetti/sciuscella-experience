@@ -711,6 +711,78 @@
     var currentStroke = {};     // { 'Left': <stroke obj>, 'Right': <stroke obj> }
     var MIN_PATH_DIST = 3;      // px minimi tra punti consecutivi REGISTRATI
 
+    // ── Tracking persistente per posizione (ignora label-flip di MediaPipe) ──
+    // MediaPipe occasionalmente scambia l'etichetta Left/Right per la STESSA
+    // mano fisica tra frame consecutivi: questo spezza la stroke. Qui usiamo
+    // la posizione del frame precedente per riassegnare gli slot in modo stabile.
+    var trackedHands = {};               // { 'Left'|'Right': { x, y, lastFrame } }
+    var trackFrameN = 0;
+    var TRACK_DEATH_FRAMES = 10;         // ~0.3s a 30fps: tolleranza per occlusioni brevi
+    function trackMatchDistSq() {
+      // 30% della dimensione minore dello schermo: matching robusto anche su gesti veloci
+      var d = Math.min(W, H) * 0.3;
+      return d * d;
+    }
+
+    function assignStableLabels(detections) {
+      trackFrameN++;
+      var labels = new Array(detections.length).fill(null);
+      var usedLabels = {};
+
+      // 1) match greedy per distanza minima ai tracked esistenti
+      var maxDistSq = trackMatchDistSq();
+      var pairs = [];
+      for (var i = 0; i < detections.length; i++) {
+        for (var key in trackedHands) {
+          var t = trackedHands[key];
+          var dx = detections[i].x - t.x, dy = detections[i].y - t.y;
+          pairs.push({ dist: dx * dx + dy * dy, det: i, label: key });
+        }
+      }
+      pairs.sort(function (a, b) { return a.dist - b.dist; });
+      for (var k = 0; k < pairs.length; k++) {
+        var p = pairs[k];
+        if (labels[p.det] !== null) continue;
+        if (usedLabels[p.label]) continue;
+        if (p.dist > maxDistSq) continue;
+        labels[p.det] = p.label;
+        usedLabels[p.label] = true;
+      }
+
+      // 2) detection non matchate → claim del primo slot libero (Left, poi Right)
+      var slots = ['Left', 'Right'];
+      for (var i2 = 0; i2 < detections.length; i2++) {
+        if (labels[i2] !== null) continue;
+        var assigned = false;
+        for (var s = 0; s < slots.length; s++) {
+          if (!usedLabels[slots[s]]) {
+            labels[i2] = slots[s];
+            usedLabels[slots[s]] = true;
+            assigned = true;
+            break;
+          }
+        }
+        if (!assigned) labels[i2] = 'H' + i2;
+      }
+
+      // 3) aggiorna trackedHands: nuove posizioni + mantieni recenti non viste
+      var next = {};
+      for (var i3 = 0; i3 < detections.length; i3++) {
+        next[labels[i3]] = {
+          x: detections[i3].x, y: detections[i3].y, lastFrame: trackFrameN
+        };
+      }
+      for (var key2 in trackedHands) {
+        if (!next[key2] &&
+            trackFrameN - trackedHands[key2].lastFrame < TRACK_DEATH_FRAMES) {
+          next[key2] = trackedHands[key2];
+        }
+      }
+      trackedHands = next;
+
+      return labels;
+    }
+
     function stampErase(lx, ly) {
       mCtx.globalCompositeOperation = 'destination-out';
       var g = mCtx.createRadialGradient(lx, ly, 0, lx, ly, ERASER_R);
@@ -833,12 +905,18 @@
       if (!ready) { ready = true; loading.style.display = 'none'; }
 
       var lm = results.multiHandLandmarks || [];
-      var hd = results.multiHandedness || [];
 
-      // Per ogni mano rilevata: chiama erase con la label come ID stabile
+      // Estrae le posizioni (già flippate per selfie)
+      var detections = lm.map(function (landmarks) {
+        return { x: (1 - landmarks[8].x) * W, y: landmarks[8].y * H };
+      });
+
+      // Riassegna le label in modo persistente sulla base della posizione
+      var labels = assignStableLabels(detections);
+
       var seen = {};
       for (var i = 0; i < lm.length; i++) {
-        var label = (hd[i] && hd[i].label) ? hd[i].label : ('H' + i);
+        var label = labels[i];
         seen[label] = true;
         erase(lm[i], label);
       }
@@ -860,8 +938,10 @@
     }).start();
 
     // ── Export SVG del percorso mano ─────────────────────────────────────────
-    // ── Smoothing della stroke: 3 passi di media pesata + Catmull-Rom Bezier ─
-    var SMOOTH_PASSES = 3;
+    // ── Smoothing della stroke: 1 passo WMA + Catmull-Rom con tensione media ─
+    var SMOOTH_PASSES   = 1;   // era 3 — meno passi = curve meno "tirate"
+    var CR_DIVISOR      = 10;  // era 6 — divisore più alto = curve più strette
+    var STROKE_WIDTH    = 1.0; // era 0.5 — tratto raddoppiato
 
     function smoothPoints(points, passes) {
       if (points.length < 3) return points.slice();
@@ -895,10 +975,10 @@
         var p1 = pts[i];
         var p2 = pts[i + 1];
         var p3 = pts[Math.min(pts.length - 1, i + 2)];
-        var cp1x = p1.x + (p2.x - p0.x) / 6;
-        var cp1y = p1.y + (p2.y - p0.y) / 6;
-        var cp2x = p2.x - (p3.x - p1.x) / 6;
-        var cp2y = p2.y - (p3.y - p1.y) / 6;
+        var cp1x = p1.x + (p2.x - p0.x) / CR_DIVISOR;
+        var cp1y = p1.y + (p2.y - p0.y) / CR_DIVISOR;
+        var cp2x = p2.x - (p3.x - p1.x) / CR_DIVISOR;
+        var cp2y = p2.y - (p3.y - p1.y) / CR_DIVISOR;
         d += ' C' + cp1x.toFixed(2) + ',' + cp1y.toFixed(2) +
              ' '  + cp2x.toFixed(2) + ',' + cp2y.toFixed(2) +
              ' '  + p2.x.toFixed(2)  + ',' + p2.y.toFixed(2);
@@ -920,7 +1000,7 @@
       var pathEls = pickedStrokes.map(function (s) {
         var smoothed = smoothPoints(s.points, SMOOTH_PASSES);
         var d = strokeToSmoothPath(smoothed);
-        return '<path d="' + d + '" fill="none" stroke="black" stroke-width="0.5" ' +
+        return '<path d="' + d + '" fill="none" stroke="black" stroke-width="' + STROKE_WIDTH + '" ' +
                'stroke-linejoin="round" stroke-linecap="round"/>';
       }).join('');
 
