@@ -37,6 +37,69 @@
       text-transform: uppercase; cursor: pointer; backdrop-filter: blur(6px);
     }
     #ui button:hover { background: rgba(255,255,255,0.15); }
+
+    /* ── Diagnostic box ─────────────────────────────────────────── */
+    #hands-diag {
+      position: fixed;
+      top: 18px; right: 18px;
+      width: 320px;
+      background: rgba(10,10,12,0.78);
+      backdrop-filter: blur(24px) saturate(160%);
+      -webkit-backdrop-filter: blur(24px) saturate(160%);
+      border: 1px solid rgba(255,255,255,0.16);
+      border-radius: 14px;
+      padding: 10px;
+      z-index: 200;
+      color: rgba(255,255,255,0.92);
+      font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+      box-shadow: 0 18px 40px rgba(0,0,0,0.5);
+    }
+    .diag-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 4px 8px;
+      gap: 8px;
+    }
+    .diag-title {
+      font-size: 10px; font-weight: 600;
+      letter-spacing: 0.18em; text-transform: uppercase;
+      color: rgba(255,255,255,0.95);
+    }
+    .diag-stats {
+      font-size: 9px;
+      letter-spacing: 0.1em;
+      font-variant-numeric: tabular-nums;
+      color: rgba(255,255,255,0.6);
+      margin-left: auto;
+    }
+    .diag-close {
+      background: none; border: none;
+      color: rgba(255,255,255,0.7);
+      font-size: 18px; line-height: 1;
+      cursor: pointer; padding: 0 4px;
+    }
+    .diag-close:hover { color: #fff; }
+    #diagCanvas {
+      display: block; width: 100%;
+      border-radius: 8px;
+      background: #111;
+    }
+    .diag-legend {
+      margin-top: 8px;
+      font-size: 9px;
+      letter-spacing: 0.04em;
+      line-height: 1.6;
+      color: rgba(255,255,255,0.55);
+      padding: 0 4px;
+    }
+    .diag-legend .dot {
+      display: inline-block;
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      vertical-align: middle;
+      margin-right: 6px;
+    }
+    .diag-legend .dot-w { background: #fff; box-shadow: 0 0 0 1.5px rgba(255,255,255,0.4); }
+    .diag-legend .dot-c { background: #00e5ff; }
   </style>
 </head>
 <body>
@@ -53,6 +116,21 @@
     <button id="btnSaveR"   title="Esporta SVG mano destra">↓ R</button>
     <button id="btnSaveAll" title="Esporta SVG entrambe le mani (S)">↓ ALL</button>
     <button id="btnA4"     title="Genera poster A4 PNG trasparente (A)">↓ A4</button>
+    <button id="btnDiag"   title="Visualizzatore MediaPipe Hands (D)">📷 Diag</button>
+  </div>
+
+  <!-- ── Visualizzatore diagnostico MediaPipe Hands ────────────────────── -->
+  <div id="hands-diag" hidden>
+    <div class="diag-header">
+      <span class="diag-title">MediaPipe Hands · max 6</span>
+      <span class="diag-stats" id="diagStats">— mani · — fps</span>
+      <button class="diag-close" id="diagClose" title="Chiudi">×</button>
+    </div>
+    <canvas id="diagCanvas" width="320" height="240"></canvas>
+    <div class="diag-legend">
+      <span class="dot dot-w"></span> indice (landmark 8) — usato per cancellare<br>
+      <span class="dot dot-c"></span> altri 20 keypoint per mano (colore per mano)
+    </div>
   </div>
 
   <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
@@ -930,6 +1008,9 @@
           delete currentStroke[key];
         }
       }
+
+      // Diagnostic overlay (se aperto)
+      drawDiagnostic(results);
     });
 
     new Camera(video, {
@@ -1181,6 +1262,151 @@
       }, 'image/png');
     }
 
+    // ── Diagnostic MediaPipe Hands visualizer ────────────────────────────
+    var HAND_CONNECTIONS = [
+      [0,1],[1,2],[2,3],[3,4],          // pollice
+      [0,5],[5,6],[6,7],[7,8],          // indice (8 = punta, quella usata)
+      [5,9],[9,10],[10,11],[11,12],     // medio
+      [9,13],[13,14],[14,15],[15,16],   // anulare
+      [13,17],[17,18],[18,19],[19,20],  // mignolo
+      [0,17]                             // base palmo
+    ];
+    var HAND_COLORS = ['#00e5ff','#ff2d8f','#ffe600','#0bff6a','#ff6b35','#a78bfa'];
+
+    var diagBox      = document.getElementById('hands-diag');
+    var diagCanvas   = document.getElementById('diagCanvas');
+    var diagCtx      = diagCanvas.getContext('2d');
+    var diagStats    = document.getElementById('diagStats');
+    var diagVisible  = false;
+    var diagFps = 0, diagFpsAccum = 0, diagFpsCount = 0, diagFpsLast = 0;
+
+    function setDiag(visible) {
+      diagVisible = !!visible;
+      diagBox.hidden = !diagVisible;
+      // Quando il diag è aperto, alziamo maxNumHands per vedere il limite.
+      hands.setOptions({
+        maxNumHands: diagVisible ? 6 : 2,
+        modelComplexity: 1,
+        minDetectionConfidence: 0.7,
+        minTrackingConfidence: 0.5
+      });
+    }
+
+    function drawDiagnostic(results) {
+      if (!diagVisible) return;
+
+      // FPS rolling
+      var now = performance.now();
+      if (diagFpsLast > 0) {
+        diagFpsAccum += now - diagFpsLast;
+        diagFpsCount++;
+        if (diagFpsAccum >= 500) {
+          diagFps = Math.round(1000 / (diagFpsAccum / diagFpsCount));
+          diagFpsAccum = 0; diagFpsCount = 0;
+        }
+      }
+      diagFpsLast = now;
+
+      var dW = diagCanvas.width, dH = diagCanvas.height;
+
+      // 1) feed webcam mirrorato (selfie mode)
+      diagCtx.save();
+      diagCtx.scale(-1, 1);
+      diagCtx.drawImage(video, -dW, 0, dW, dH);
+      diagCtx.restore();
+
+      // velo scuro per leggibilità
+      diagCtx.fillStyle = 'rgba(0,0,0,0.35)';
+      diagCtx.fillRect(0, 0, dW, dH);
+
+      var lm = results.multiHandLandmarks || [];
+      var hd = results.multiHandedness || [];
+
+      for (var h = 0; h < lm.length; h++) {
+        var landmarks = lm[h];
+        var handedness = hd[h];
+        var color = HAND_COLORS[h % HAND_COLORS.length];
+
+        // bounding box (dai landmark min/max)
+        var minX = 1, minY = 1, maxX = 0, maxY = 0;
+        for (var p = 0; p < landmarks.length; p++) {
+          var pp = landmarks[p];
+          if (pp.x < minX) minX = pp.x;
+          if (pp.x > maxX) maxX = pp.x;
+          if (pp.y < minY) minY = pp.y;
+          if (pp.y > maxY) maxY = pp.y;
+        }
+        // mirror x
+        var bx = (1 - maxX) * dW;
+        var by = minY * dH;
+        var bw = (maxX - minX) * dW;
+        var bh = (maxY - minY) * dH;
+
+        diagCtx.strokeStyle = color;
+        diagCtx.lineWidth = 1;
+        diagCtx.globalAlpha = 0.5;
+        diagCtx.strokeRect(bx, by, bw, bh);
+        diagCtx.globalAlpha = 1;
+
+        // connessioni scheletro
+        diagCtx.strokeStyle = color;
+        diagCtx.lineWidth = 1.6;
+        diagCtx.globalAlpha = 0.85;
+        for (var c = 0; c < HAND_CONNECTIONS.length; c++) {
+          var a = landmarks[HAND_CONNECTIONS[c][0]];
+          var b = landmarks[HAND_CONNECTIONS[c][1]];
+          diagCtx.beginPath();
+          diagCtx.moveTo((1 - a.x) * dW, a.y * dH);
+          diagCtx.lineTo((1 - b.x) * dW, b.y * dH);
+          diagCtx.stroke();
+        }
+        diagCtx.globalAlpha = 1;
+
+        // 21 landmark
+        for (var i = 0; i < landmarks.length; i++) {
+          var lp = landmarks[i];
+          var px = (1 - lp.x) * dW, py = lp.y * dH;
+          if (i === 8) continue; // disegnato dopo, evidenziato
+          diagCtx.fillStyle = color;
+          diagCtx.beginPath();
+          diagCtx.arc(px, py, 2.5, 0, Math.PI * 2);
+          diagCtx.fill();
+        }
+
+        // landmark 8 evidenziato (è quello che cancella il velo)
+        var p8 = landmarks[8];
+        var p8x = (1 - p8.x) * dW, p8y = p8.y * dH;
+        diagCtx.fillStyle = '#fff';
+        diagCtx.beginPath();
+        diagCtx.arc(p8x, p8y, 4, 0, Math.PI * 2);
+        diagCtx.fill();
+        diagCtx.strokeStyle = 'rgba(255,255,255,0.8)';
+        diagCtx.lineWidth = 1.2;
+        diagCtx.beginPath();
+        diagCtx.arc(p8x, p8y, 9, 0, Math.PI * 2);
+        diagCtx.stroke();
+
+        // label handedness + confidence
+        if (handedness) {
+          var text = handedness.label + ' ' + Math.round(handedness.score * 100) + '%';
+          diagCtx.font = '11px "Helvetica Neue", Helvetica, Arial, sans-serif';
+          var tw = diagCtx.measureText(text).width;
+          var tx = Math.max(2, Math.min(dW - tw - 6, bx));
+          var ty = Math.max(12, by - 4);
+          diagCtx.fillStyle = 'rgba(0,0,0,0.65)';
+          diagCtx.fillRect(tx - 2, ty - 10, tw + 6, 13);
+          diagCtx.fillStyle = '#fff';
+          diagCtx.fillText(text, tx + 1, ty);
+        }
+      }
+
+      // HUD
+      diagStats.textContent = lm.length + ' mani · ' + diagFps + ' fps';
+    }
+
+    document.getElementById('btnDiag').addEventListener('click', function () { setDiag(!diagVisible); });
+    document.getElementById('diagClose').addEventListener('click', function () { setDiag(false); });
+
     document.getElementById('btnSaveL').addEventListener('click', function () { exportSvgFor('Left'); });
     document.getElementById('btnSaveR').addEventListener('click', function () { exportSvgFor('Right'); });
     document.getElementById('btnSaveAll').addEventListener('click', function () { exportSvgFor('all'); });
@@ -1192,6 +1418,7 @@
       if (e.key === 'c' || e.key === 'C') clearPath();
       if (e.key === 'r' || e.key === 'R') revealAll();
       if (e.key === 'a' || e.key === 'A') exportA4();
+      if (e.key === 'd' || e.key === 'D') setDiag(!diagVisible);
     });
 
     requestAnimationFrame(render);
