@@ -786,7 +786,7 @@
     var trackedPersons = {};      // { id (string): { x, y, w, h, score, lastFrame } }
     var nextPersonId = 1;
     var trackFrameN = 0;
-    var TRACK_DEATH_FRAMES = 15;  // ~0.5s a 30fps: tolleranza occlusioni brevi
+    var TRACK_DEATH_FRAMES = 120; // ~4s a 30fps: tolleranza generosa per buchi di detection
     function trackMatchDistSq() {
       var d = Math.min(W, H) * 0.3;
       return d * d;
@@ -960,8 +960,8 @@
     var MP_TASKS_VERSION  = '0.10.21';
     var MP_MODEL_URL      = 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task';
     var MAX_POSES         = 5;
-    var MIN_POSE_CONF     = 0.5;
-    var MIRROR_VIDEO      = true;   // selfie mode (per camera zenitale → false)
+    var MIN_POSE_CONF     = 0.3;   // soglia bassa: meno "buchi" di detection su persona ferma
+    var MIRROR_VIDEO      = true;  // selfie mode (per camera zenitale → false)
 
     // Indici landmark MediaPipe Pose
     var LM_NOSE = 0, LM_L_SHOULDER = 11, LM_R_SHOULDER = 12;
@@ -995,9 +995,9 @@
           baseOptions: { modelAssetPath: MP_MODEL_URL, delegate: 'GPU' },
           runningMode: 'VIDEO',
           numPoses: MAX_POSES,
-          minPoseDetectionConfidence: MIN_POSE_CONF,
-          minPosePresenceConfidence: 0.5,
-          minTrackingConfidence: 0.5
+          minPoseDetectionConfidence: MIN_POSE_CONF,    // 0.3
+          minPosePresenceConfidence: MIN_POSE_CONF,     // 0.3
+          minTrackingConfidence: MIN_POSE_CONF          // 0.3
         });
         poseReady = true;
         loadingMsg.textContent = 'Modello pronto. Avvio webcam...';
