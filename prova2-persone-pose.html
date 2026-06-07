@@ -49,6 +49,7 @@
       text-transform: uppercase; cursor: pointer; backdrop-filter: blur(6px);
     }
     #ui button:hover { background: rgba(255,255,255,0.15); }
+    #ui button.on    { background: rgba(255,255,255,0.32); color: #fff; }
 
     /* ── Diagnostic box ─────────────────────────────────────────── */
     #hands-diag {
@@ -126,7 +127,10 @@
     <button id="btnClear"  title="Cancella percorso (C)">Clear</button>
     <button id="btnSaveAll" title="Esporta SVG di tutte le persone (S)">↓ SVG</button>
     <button id="btnA4"     title="Genera poster A4 PNG trasparente (A)">↓ A4</button>
-    <button id="btnDiag"   title="Visualizzatore MediaPipe Pose (D)">📷 Diag</button>
+    <button id="btnDiag"     title="Visualizzatore MediaPipe Pose (D)">📷 Diag</button>
+    <button id="btnCam"      title="Cambia camera (cicla tra le webcam disponibili)">📷 Cam</button>
+    <button id="btnMirror"   title="Toggle mirror (spegni per camera dall'alto)">↔ Mirror</button>
+    <button id="btnOverhead" title="Modalità camera dall'alto: allenta validazione + cambia centroide">⤓ Alto</button>
   </div>
 
   <!-- ── Visualizzatore diagnostico MediaPipe Pose ───────────────────────── -->
@@ -973,7 +977,8 @@
     var MP_MODEL_URL      = 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task';
     var MAX_POSES         = 5;
     var MIN_POSE_CONF     = 0.4;   // compromesso: meno buchi vs meno falsi positivi
-    var MIRROR_VIDEO      = true;  // selfie mode (per camera zenitale → false)
+    var MIRROR_VIDEO      = true;  // selfie mode (per camera zenitale → false, vedi bottone)
+    var OVERHEAD_MODE     = false; // modalità camera dall'alto: vedi bottone "⤓ Alto"
 
     // ── Validazione "è davvero una persona?" ────────────────────────────
     var MIN_VISIBLE_LANDMARKS = 12;     // su 33
@@ -981,6 +986,22 @@
     var MIN_BBOX_W_FRAC       = 0.04;   // larghezza minima rispetto a W
     var MIN_BBOX_H_FRAC       = 0.08;   // altezza minima rispetto a H
     var MAX_BBOX_ASPECT       = 2.5;    // larghezza / altezza: oltre = sicuramente non persona
+
+    // Quando OVERHEAD_MODE è attivo, riapplica questi parametri rilassati
+    // (dall'alto si vedono solo testa + spalle, bbox piccolo, gambe assenti)
+    function applyOverheadParams(on) {
+      if (on) {
+        MIN_VISIBLE_LANDMARKS = 5;
+        MIN_BBOX_W_FRAC       = 0.015;
+        MIN_BBOX_H_FRAC       = 0.025;
+        MAX_BBOX_ASPECT       = 4;
+      } else {
+        MIN_VISIBLE_LANDMARKS = 12;
+        MIN_BBOX_W_FRAC       = 0.04;
+        MIN_BBOX_H_FRAC       = 0.08;
+        MAX_BBOX_ASPECT       = 2.5;
+      }
+    }
 
     function isPlausiblePerson(lms, bb) {
       if (!bb) return false;
@@ -1044,16 +1065,54 @@
       }
     }
 
-    // ── Avvio webcam ──────────────────────────────────────────────────────
+    // ── Avvio webcam + supporto multi-camera ────────────────────────────
+    var videoDevices    = [];
+    var currentCamIdx   = 0;
+
+    async function listVideoDevices() {
+      var devs = await navigator.mediaDevices.enumerateDevices();
+      videoDevices = devs.filter(function (d) { return d.kind === 'videoinput'; });
+      return videoDevices;
+    }
+
+    async function useCamera(idx) {
+      if (videoDevices.length === 0) return;
+      var n = videoDevices.length;
+      currentCamIdx = ((idx % n) + n) % n;
+      var device = videoDevices[currentCamIdx];
+
+      // ferma stream corrente, se presente
+      if (video.srcObject) {
+        var tracks = video.srcObject.getTracks();
+        for (var t = 0; t < tracks.length; t++) tracks[t].stop();
+      }
+
+      var stream = await navigator.mediaDevices.getUserMedia({
+        video: { deviceId: { exact: device.deviceId }, width: 1280, height: 720 },
+        audio: false
+      });
+      video.srcObject = stream;
+      await new Promise(function (resolve) { video.onloadedmetadata = resolve; });
+      await video.play();
+
+      // Aggiorna tooltip bottone con label camera corrente
+      var btnCam = document.getElementById('btnCam');
+      var label = device.label || ('camera ' + (currentCamIdx + 1));
+      btnCam.title = (currentCamIdx + 1) + '/' + n + ' — ' + label +
+                     ' (click per la prossima)';
+      btnCam.textContent = '📷 Cam ' + (currentCamIdx + 1) + '/' + n;
+    }
+
     async function initCamera() {
       try {
-        var stream = await navigator.mediaDevices.getUserMedia({
-          video: { width: 1280, height: 720, facingMode: 'user' },
-          audio: false
-        });
-        video.srcObject = stream;
-        await new Promise(function (resolve) { video.onloadedmetadata = resolve; });
-        await video.play();
+        // Probe iniziale per ottenere permessi (necessario perché i label sono
+        // vuoti finché l'utente non ha concesso accesso almeno una volta)
+        var probe = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        probe.getTracks().forEach(function (t) { t.stop(); });
+
+        await listVideoDevices();
+        if (videoDevices.length === 0) throw new Error('Nessuna webcam trovata');
+        await useCamera(0);
         loadingMsg.textContent = 'Pronto';
       } catch (e) {
         console.error('[camera init]', e);
@@ -1070,9 +1129,18 @@
       };
     }
 
-    // Computa "centro spalle" (mid-point spalle sx/dx) come posizione del corpo.
-    // Se le spalle non sono visibili o assenti, fallback al naso.
+    // Centroide per il body.
+    // - OVERHEAD_MODE on: dall'alto, il NASO (cocuzzolo della testa) è il
+    //   punto più stabile, perché spalle e torso sono scorciati o nascosti.
+    // - OVERHEAD_MODE off: mid-point spalle (più stabile per vista frontale).
     function centroidFromLandmarks(landmarks) {
+      if (OVERHEAD_MODE) {
+        var nose = landmarks[LM_NOSE];
+        if (nose && (nose.visibility == null || nose.visibility > 0.2)) {
+          return lmToCanvas(nose);
+        }
+        // fallback su spalle se naso non visibile
+      }
       var lsh = landmarks[LM_L_SHOULDER];
       var rsh = landmarks[LM_R_SHOULDER];
       var ok = lsh && rsh &&
@@ -1084,8 +1152,8 @@
           y: ((lsh.y + rsh.y) / 2) * H
         };
       }
-      var nose = landmarks[LM_NOSE];
-      if (nose) return lmToCanvas(nose);
+      var noseFb = landmarks[LM_NOSE];
+      if (noseFb) return lmToCanvas(noseFb);
       return null;
     }
 
@@ -1588,6 +1656,37 @@
 
     document.getElementById('btnDiag').addEventListener('click', function () { setDiag(!diagVisible); });
     document.getElementById('diagClose').addEventListener('click', function () { setDiag(false); });
+
+    // Cycle through cameras
+    document.getElementById('btnCam').addEventListener('click', async function () {
+      try {
+        await listVideoDevices(); // refresh (Iriun può aggiungere/togliere device a runtime)
+        await useCamera(currentCamIdx + 1);
+      } catch (e) {
+        console.error('[btnCam]', e);
+      }
+    });
+
+    // Mirror toggle
+    var btnMirror = document.getElementById('btnMirror');
+    btnMirror.classList.toggle('on', MIRROR_VIDEO);
+    btnMirror.addEventListener('click', function () {
+      MIRROR_VIDEO = !MIRROR_VIDEO;
+      btnMirror.classList.toggle('on', MIRROR_VIDEO);
+    });
+
+    // Overhead mode toggle
+    var btnOverhead = document.getElementById('btnOverhead');
+    btnOverhead.addEventListener('click', function () {
+      OVERHEAD_MODE = !OVERHEAD_MODE;
+      applyOverheadParams(OVERHEAD_MODE);
+      btnOverhead.classList.toggle('on', OVERHEAD_MODE);
+      // In modalità dall'alto disattiviamo anche il mirror automaticamente
+      if (OVERHEAD_MODE && MIRROR_VIDEO) {
+        MIRROR_VIDEO = false;
+        btnMirror.classList.toggle('on', false);
+      }
+    });
 
     document.getElementById('btnSaveAll').addEventListener('click', function () { exportSvgFor('all'); });
     document.getElementById('btnClear').addEventListener('click', clearPath);
