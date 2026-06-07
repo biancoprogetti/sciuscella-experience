@@ -798,9 +798,9 @@
     var trackedPersons = {};      // { id (string): { x, y, w, h, score, lastFrame } }
     var nextPersonId = 1;
     var trackFrameN = 0;
-    var TRACK_DEATH_FRAMES = 120; // ~4s a 30fps: tolleranza generosa per buchi di detection
+    var TRACK_DEATH_FRAMES = 300; // ~10s a 30fps: persona può uscire e rientrare
     function trackMatchDistSq() {
-      var d = Math.min(W, H) * 0.3;
+      var d = Math.min(W, H) * 0.5; // raggio match ampio: persona che salta in giro resta lo stesso ID
       return d * d;
     }
 
@@ -972,8 +972,33 @@
     var MP_TASKS_VERSION  = '0.10.21';
     var MP_MODEL_URL      = 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task';
     var MAX_POSES         = 5;
-    var MIN_POSE_CONF     = 0.3;   // soglia bassa: meno "buchi" di detection su persona ferma
+    var MIN_POSE_CONF     = 0.4;   // compromesso: meno buchi vs meno falsi positivi
     var MIRROR_VIDEO      = true;  // selfie mode (per camera zenitale → false)
+
+    // ── Validazione "è davvero una persona?" ────────────────────────────
+    var MIN_VISIBLE_LANDMARKS = 12;     // su 33
+    var MIN_VISIBILITY        = 0.5;    // soglia per contare un keypoint come "visibile"
+    var MIN_BBOX_W_FRAC       = 0.04;   // larghezza minima rispetto a W
+    var MIN_BBOX_H_FRAC       = 0.08;   // altezza minima rispetto a H
+    var MAX_BBOX_ASPECT       = 2.5;    // larghezza / altezza: oltre = sicuramente non persona
+
+    function isPlausiblePerson(lms, bb) {
+      if (!bb) return false;
+      var bw = bb.x2 - bb.x1, bh = bb.y2 - bb.y1;
+      if (bw < W * MIN_BBOX_W_FRAC) return false;
+      if (bh < H * MIN_BBOX_H_FRAC) return false;
+      if (bw / bh > MAX_BBOX_ASPECT) return false;
+      var visible = 0;
+      for (var v = 0; v < lms.length; v++) {
+        if (lms[v] && lms[v].visibility != null && lms[v].visibility >= MIN_VISIBILITY) visible++;
+      }
+      if (visible < MIN_VISIBLE_LANDMARKS) return false;
+      var lsh = lms[LM_L_SHOULDER], rsh = lms[LM_R_SHOULDER];
+      var hasShoulder = (lsh && lsh.visibility != null && lsh.visibility >= 0.3) ||
+                        (rsh && rsh.visibility != null && rsh.visibility >= 0.3);
+      if (!hasShoulder) return false;
+      return true;
+    }
 
     // Indici landmark MediaPipe Pose
     var LM_NOSE = 0, LM_L_SHOULDER = 11, LM_R_SHOULDER = 12;
@@ -1119,9 +1144,14 @@
         var poses = results.landmarks || [];
         for (var i = 0; i < poses.length; i++) {
           var lms = poses[i];
+          var bb = bboxFromLandmarks(lms);
+
+          // ─── VALIDAZIONE: questa detection è davvero una persona? ───
+          if (!isPlausiblePerson(lms, bb)) continue;
+
           var centroid = centroidFromLandmarks(lms);
           if (!centroid) continue;
-          var bb = bboxFromLandmarks(lms);
+
           // Score medio di visibility dei keypoint chiave (approssimazione)
           var keyIdx = [LM_NOSE, LM_L_SHOULDER, LM_R_SHOULDER];
           var avgV = 0, n = 0;
@@ -1134,10 +1164,7 @@
           detections.push({
             x: centroid.x, y: centroid.y,
             landmarks: lms,
-            x1: bb ? bb.x1 : centroid.x - 50,
-            y1: bb ? bb.y1 : centroid.y - 80,
-            x2: bb ? bb.x2 : centroid.x + 50,
-            y2: bb ? bb.y2 : centroid.y + 80,
+            x1: bb.x1, y1: bb.y1, x2: bb.x2, y2: bb.y2,
             score: score
           });
         }
