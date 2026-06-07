@@ -3,6 +3,18 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <!-- CSP permissiva: necessario per MediaPipe Tasks Vision che usa eval()
+       internamente per ottimizzazioni del path JS → WASM glue.
+       Senza 'unsafe-eval' il modello può cadere in path lenti o fallire.
+       Per produzione fissa più stretta. -->
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self' https: data: blob: 'unsafe-inline' 'unsafe-eval';
+                 img-src    'self' https: data: blob:;
+                 media-src  'self' https: blob:;
+                 connect-src 'self' https: blob: data:;
+                 worker-src 'self' blob:;
+                 script-src 'self' https: blob: 'unsafe-inline' 'unsafe-eval';
+                 style-src  'self' https: 'unsafe-inline';">
   <title>Prova 2 — Persone (MediaPipe Pose)</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
