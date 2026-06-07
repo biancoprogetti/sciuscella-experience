@@ -37,6 +37,7 @@
       text-transform: uppercase; cursor: pointer; backdrop-filter: blur(6px);
     }
     #ui button:hover { background: rgba(255,255,255,0.15); }
+    #ui button.on    { background: rgba(255,255,255,0.32); color: #fff; }
 
     /* ── Diagnostic box ─────────────────────────────────────────── */
     #hands-diag {
@@ -114,7 +115,10 @@
     <button id="btnClear"  title="Cancella percorso (C)">Clear</button>
     <button id="btnSaveAll" title="Esporta SVG di tutte le persone (S)">↓ SVG</button>
     <button id="btnA4"     title="Genera poster A4 PNG trasparente (A)">↓ A4</button>
-    <button id="btnDiag"   title="Visualizzatore YOLOv8n (D)">📷 Diag</button>
+    <button id="btnDiag"     title="Visualizzatore YOLOv8n (D)">📷 Diag</button>
+    <button id="btnCam"      title="Cambia camera (cicla tra le webcam disponibili)">📷 Cam</button>
+    <button id="btnMirror"   title="Toggle mirror (spegni per camera dall'alto)">↔ Mirror</button>
+    <button id="btnOverhead" title="Modalità camera dall'alto: soglia detection più bassa">⤓ Alto</button>
   </div>
 
   <!-- ── Visualizzatore diagnostico YOLOv8n ────────────────────────────── -->
@@ -964,7 +968,14 @@
     var DETECTION_THRESHOLD  = 0.35;  // confidenza minima
     var NMS_THRESHOLD        = 0.45;  // soglia non-max suppression
     var DETECTION_TARGET_FPS = 20;    // throttle inferenza (più alto = più carico CPU)
-    var MIRROR_VIDEO         = true;  // selfie mode (per ora — invertire per camera zenitale)
+    var MIRROR_VIDEO         = true;  // selfie mode (spegni per camera dall'alto)
+    var OVERHEAD_MODE        = false; // toggle col bottone "⤓ Alto"
+
+    function applyOverheadParams(on) {
+      // Dall'alto YOLO può vedere persone con score più basso (vista insolita).
+      // Allentiamo solo la confidence; NMS resta uguale.
+      DETECTION_THRESHOLD = on ? 0.25 : 0.35;
+    }
 
     var yoloSession = null;
     var yoloReady   = false;
@@ -996,20 +1007,55 @@
       }
     }
 
-    // ── Avvio webcam (getUserMedia diretto, non MediaPipe Camera) ─────────
+    // ── Avvio webcam + supporto multi-camera (per Iriun/DroidCam) ─────────
+    var videoDevices  = [];
+    var currentCamIdx = 0;
+
+    async function listVideoDevices() {
+      var devs = await navigator.mediaDevices.enumerateDevices();
+      videoDevices = devs.filter(function (d) { return d.kind === 'videoinput'; });
+      return videoDevices;
+    }
+
+    async function useCamera(idx) {
+      if (videoDevices.length === 0) return;
+      var n = videoDevices.length;
+      currentCamIdx = ((idx % n) + n) % n;
+      var device = videoDevices[currentCamIdx];
+
+      if (video.srcObject) {
+        var tracks = video.srcObject.getTracks();
+        for (var t = 0; t < tracks.length; t++) tracks[t].stop();
+      }
+
+      var stream = await navigator.mediaDevices.getUserMedia({
+        video: { deviceId: { exact: device.deviceId }, width: 1280, height: 720 },
+        audio: false
+      });
+      video.srcObject = stream;
+      await new Promise(function (resolve) { video.onloadedmetadata = resolve; });
+      await video.play();
+
+      var btnCam = document.getElementById('btnCam');
+      var label = device.label || ('camera ' + (currentCamIdx + 1));
+      btnCam.title = (currentCamIdx + 1) + '/' + n + ' — ' + label +
+                     ' (click per la prossima)';
+      btnCam.textContent = '📷 Cam ' + (currentCamIdx + 1) + '/' + n;
+    }
+
     async function initCamera() {
       try {
-        var stream = await navigator.mediaDevices.getUserMedia({
-          video: { width: 1280, height: 720, facingMode: 'user' },
-          audio: false
-        });
-        video.srcObject = stream;
-        await new Promise(function (resolve) { video.onloadedmetadata = resolve; });
-        await video.play();
+        // Probe per ottenere permessi (label rimangono vuoti senza permesso)
+        var probe = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        probe.getTracks().forEach(function (t) { t.stop(); });
+
+        await listVideoDevices();
+        if (videoDevices.length === 0) throw new Error('Nessuna webcam trovata');
+        await useCamera(0);
         loadingMsg.textContent = 'Pronto';
       } catch (e) {
         console.error('[camera init]', e);
-        loadingMsg.textContent = 'Errore webcam: ' + e.message;
+        loadingMsg.textContent = 'Errore webcam: ' + (e.message || e);
       }
     }
 
@@ -1498,6 +1544,36 @@
     }
 
     document.getElementById('btnDiag').addEventListener('click', function () { setDiag(!diagVisible); });
+
+    // Cycle through cameras
+    document.getElementById('btnCam').addEventListener('click', async function () {
+      try {
+        await listVideoDevices();
+        await useCamera(currentCamIdx + 1);
+      } catch (e) {
+        console.error('[btnCam]', e);
+      }
+    });
+
+    // Mirror toggle
+    var btnMirror = document.getElementById('btnMirror');
+    btnMirror.classList.toggle('on', MIRROR_VIDEO);
+    btnMirror.addEventListener('click', function () {
+      MIRROR_VIDEO = !MIRROR_VIDEO;
+      btnMirror.classList.toggle('on', MIRROR_VIDEO);
+    });
+
+    // Overhead mode toggle
+    var btnOverhead = document.getElementById('btnOverhead');
+    btnOverhead.addEventListener('click', function () {
+      OVERHEAD_MODE = !OVERHEAD_MODE;
+      applyOverheadParams(OVERHEAD_MODE);
+      btnOverhead.classList.toggle('on', OVERHEAD_MODE);
+      if (OVERHEAD_MODE && MIRROR_VIDEO) {
+        MIRROR_VIDEO = false;
+        btnMirror.classList.toggle('on', false);
+      }
+    });
     document.getElementById('diagClose').addEventListener('click', function () { setDiag(false); });
 
     document.getElementById('btnSaveAll').addEventListener('click', function () { exportSvgFor('all'); });
