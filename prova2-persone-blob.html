@@ -1,0 +1,1639 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Prova 2 — Persone (Blob tracking)</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400&family=Work+Sans:wght@400&family=Libre+Franklin:wght@400&family=Source+Sans+3:wght@400&family=DM+Sans:wght@400&family=Karla:wght@400&family=Rubik:wght@400&family=IBM+Plex+Sans:wght@400&family=Lora:wght@400&family=Spectral:wght@400&family=EB+Garamond:wght@400&family=Source+Serif+4:wght@400&family=Crimson+Pro:wght@400&family=Bitter:wght@400&family=PT+Serif:wght@400&family=Libre+Baskerville:wght@400&display=swap" rel="stylesheet">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; }
+    body {
+      background: #fbfceb;
+      overflow: hidden;
+      font-family: "Neue Haas Grotesk Display Pro", "Neue Haas Grotesk Text Pro",
+                   "NeueHaasGrotesk", "Helvetica Neue", Helvetica, Arial, sans-serif;
+      color: #fff;
+    }
+    canvas { display: block; }
+    video { display: none; }
+    #loading {
+      position: fixed; inset: 0; background: #000; color: #fff;
+      font-size: 16px; letter-spacing: 0.25em; text-transform: uppercase;
+      display: flex; flex-direction: column; align-items: center;
+      justify-content: center; gap: 24px; z-index: 99;
+    }
+    #loading p { opacity: 0.5; font-size: 12px; letter-spacing: 0.15em; }
+    #ui {
+      position: fixed; bottom: 18px; right: 18px;
+      display: flex; gap: 10px; z-index: 10;
+    }
+    #ui button {
+      background: rgba(0,0,0,0.5); color: #fff;
+      border: 1px solid rgba(255,255,255,0.4);
+      padding: 8px 14px; font-size: 11px; letter-spacing: 0.18em;
+      text-transform: uppercase; cursor: pointer; backdrop-filter: blur(6px);
+    }
+    #ui button:hover { background: rgba(255,255,255,0.15); }
+    #ui button.on    { background: rgba(255,255,255,0.32); color: #fff; }
+
+    /* ── Diagnostic box ─────────────────────────────────────────── */
+    #hands-diag {
+      position: fixed;
+      top: 18px; right: 18px;
+      width: 320px;
+      background: rgba(10,10,12,0.78);
+      backdrop-filter: blur(24px) saturate(160%);
+      -webkit-backdrop-filter: blur(24px) saturate(160%);
+      border: 1px solid rgba(255,255,255,0.16);
+      border-radius: 14px;
+      padding: 10px;
+      z-index: 200;
+      color: rgba(255,255,255,0.92);
+      font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
+      box-shadow: 0 18px 40px rgba(0,0,0,0.5);
+    }
+    .diag-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 4px 8px;
+      gap: 8px;
+    }
+    .diag-title {
+      font-size: 10px; font-weight: 600;
+      letter-spacing: 0.18em; text-transform: uppercase;
+      color: rgba(255,255,255,0.95);
+    }
+    .diag-stats {
+      font-size: 9px;
+      letter-spacing: 0.1em;
+      font-variant-numeric: tabular-nums;
+      color: rgba(255,255,255,0.6);
+      margin-left: auto;
+    }
+    .diag-close {
+      background: none; border: none;
+      color: rgba(255,255,255,0.7);
+      font-size: 18px; line-height: 1;
+      cursor: pointer; padding: 0 4px;
+    }
+    .diag-close:hover { color: #fff; }
+    #diagCanvas {
+      display: block; width: 100%;
+      border-radius: 8px;
+      background: #111;
+    }
+    .diag-legend {
+      margin-top: 8px;
+      font-size: 9px;
+      letter-spacing: 0.04em;
+      line-height: 1.6;
+      color: rgba(255,255,255,0.55);
+      padding: 0 4px;
+    }
+    .diag-legend .dot {
+      display: inline-block;
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      vertical-align: middle;
+      margin-right: 6px;
+    }
+    .diag-legend .dot-w { background: #fff; box-shadow: 0 0 0 1.5px rgba(255,255,255,0.4); }
+    .diag-legend .dot-c { background: #00e5ff; }
+  </style>
+</head>
+<body>
+  <div id="loading">
+    <span id="loadingMsg">Avvio webcam...</span>
+    <p>Consenti l'accesso alla fotocamera. Nessun modello da scaricare: parte subito.</p>
+  </div>
+  <video id="video" playsinline></video>
+  <canvas id="canvas"></canvas>
+  <div id="ui">
+    <button id="btnReveal" title="Svela tutto (R)">Reveal</button>
+    <button id="btnClear"  title="Cancella percorso (C)">Clear</button>
+    <button id="btnSaveAll" title="Esporta SVG di tutte le persone (S)">↓ SVG</button>
+    <button id="btnA4"     title="Genera poster A4 PNG trasparente (A)">↓ A4</button>
+    <button id="btnDiag"      title="Visualizzatore blob (D)">📷 Diag</button>
+    <button id="btnCam"       title="Cambia camera (cicla tra le webcam disponibili)">📷 Cam</button>
+    <button id="btnMirror"    title="Toggle mirror (spegni per camera dall'alto)">↔ Mirror</button>
+    <button id="btnCalibrate" title="Cattura lo sfondo: esci dall'inquadratura e premi (B)">🎯 Calibra</button>
+  </div>
+
+  <!-- ── Visualizzatore diagnostico blob tracking ─────────────────────── -->
+  <div id="hands-diag" hidden>
+    <div class="diag-header">
+      <span class="diag-title">Blob tracking · backsub</span>
+      <span class="diag-stats" id="diagStats">— masse · — fps</span>
+      <button class="diag-close" id="diagClose" title="Chiudi">×</button>
+    </div>
+    <canvas id="diagCanvas" width="320" height="240"></canvas>
+    <div class="diag-legend">
+      <span class="dot dot-w"></span> centroide + cerchio di ingombro (cancella il velo)<br>
+      <span class="dot dot-c"></span> area rossa = differenza dallo sfondo calibrato
+    </div>
+  </div>
+
+  <script>
+  (function () {
+    'use strict';
+
+    // ── Canvas (full-window, niente DPR: 1px CSS = 1px canvas, come index) ────
+    var canvas = document.getElementById('canvas');
+    var ctx = canvas.getContext('2d');
+    var W = window.innerWidth, H = window.innerHeight;
+    canvas.width = W; canvas.height = H;
+
+    var textLayer = document.createElement('canvas');
+    textLayer.width = W; textLayer.height = H;
+    var tCtx = textLayer.getContext('2d');
+
+    var maskLayer = document.createElement('canvas');
+    maskLayer.width = W; maskLayer.height = H;
+    var mCtx = maskLayer.getContext('2d');
+    var PAGE_BG = '#fbfceb'; // giallino chiarissimo: pagina e velo
+    mCtx.fillStyle = PAGE_BG; mCtx.fillRect(0, 0, W, H);
+
+    var measCtx = document.createElement('canvas').getContext('2d');
+
+    // ── Texture di pagina (grana fine, statica) sovrapposta a tutto ──────────
+    var GRAIN_ALPHA = 0.2; // intensità della grana
+    var grainLayer = document.createElement('canvas');
+    grainLayer.width = W; grainLayer.height = H;
+    (function makeGrain() {
+      var gc = grainLayer.getContext('2d');
+      var img = gc.createImageData(W, H), d = img.data;
+      for (var i = 0; i < d.length; i += 4) {
+        var v = 200 + (Math.random() * 55 | 0); // grigio chiaro [200,255]: grana sottile
+        d[i] = v; d[i + 1] = v; d[i + 2] = v; d[i + 3] = 255;
+      }
+      gc.putImageData(img, 0, 0);
+    })();
+
+    // ── Frasi letterarie italiane (pubblico dominio) ─────────────────────────
+    var PHRASES = [
+      'Nel mezzo del cammin di nostra vita mi ritrovai per una selva oscura',
+      'Lasciate ogni speranza, voi ch\'entrate',
+      'Amor che a nullo amato amar perdona',
+      'L\'amor che move il sole e l\'altre stelle',
+      'E quindi uscimmo a riveder le stelle',
+      'Non ragioniam di lor, ma guarda e passa',
+      'Solo e pensoso i più deserti campi vo mesurando a passi tardi e lenti',
+      'Pace non trovo, et non ho da far guerra; e temo, et spero',
+      'Chiare, fresche et dolci acque, ove le belle membra pose colei',
+      'È meglio essere temuto che amato, se non si può essere l\'uno e l\'altro',
+      'Le donne, i cavallier, l\'arme, gli amori, le cortesie, l\'audaci imprese io canto',
+      'All\'ombra de\' cipressi e dentro l\'urne confortate di pianto',
+      'A egregie cose il forte animo accendono l\'urne de\' forti',
+      'Quel ramo del lago di Como, che volge a mezzogiorno',
+      'Addio, monti sorgenti dall\'acque, ed elevati al cielo',
+      'Questo matrimonio non s\'ha da fare, né domani, né mai',
+      'Sempre caro mi fu quest\'ermo colle, e questa siepe',
+      'E il naufragar m\'è dolce in questo mare',
+      'Dolce e chiara è la notte e senza vento',
+      'L\'infinita vanità del tutto',
+      'Che fai tu, luna, in ciel? dimmi, che fai, silenziosa luna?',
+      'Taci. Su le soglie del bosco non odo parole che dici umane',
+      'Piove sulle tamerici salmastre ed arse, piove sui pini scagliosi ed irti',
+      'San Lorenzo, io lo so perché tanto di stelle per l\'aria tranquilla arde e cade',
+      'Uno, nessuno e centomila',
+      'Sei personaggi in cerca d\'autore'
+    ];
+
+    // ── Colori (un colore per blocco: testo + due linee) ─────────────────────
+    var COLORS = ['#ef5350', '#f472b6', '#ffd23f', '#3ddc97', '#6ec6f0']; // rosso · rosa · giallo · menta · azzurro
+    var colorBag = [];
+    function nextColor() {
+      if (!colorBag.length) colorBag = shuffle(COLORS.slice());
+      return colorBag.pop();
+    }
+    // Colore del testo (diverso dal box): bianco o nero secondo la luminanza del box
+    function textColorFor(hex) {
+      var n = parseInt(hex.slice(1), 16);
+      var r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+      var lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+      return lum > 0.45 ? '#111111' : '#ffffff';
+    }
+
+    // ── Font (serif + sans serif "normali" da Google Fonts) ──────────────────
+    // Il font cambia a ogni cambio testo (ogni makeBuffer pesca da questo bag).
+    var FONTS = [
+      { n: 'Inter',           g: 'sans-serif' },
+      { n: 'Work Sans',       g: 'sans-serif' },
+      { n: 'Libre Franklin',  g: 'sans-serif' },
+      { n: 'Source Sans 3',   g: 'sans-serif' },
+      { n: 'DM Sans',         g: 'sans-serif' },
+      { n: 'Karla',           g: 'sans-serif' },
+      { n: 'Rubik',           g: 'sans-serif' },
+      { n: 'IBM Plex Sans',   g: 'sans-serif' },
+      { n: 'Lora',            g: 'serif' },
+      { n: 'Spectral',        g: 'serif' },
+      { n: 'EB Garamond',     g: 'serif' },
+      { n: 'Source Serif 4',  g: 'serif' },
+      { n: 'Crimson Pro',     g: 'serif' },
+      { n: 'Bitter',          g: 'serif' },
+      { n: 'PT Serif',        g: 'serif' },
+      { n: 'Libre Baskerville', g: 'serif' }
+    ];
+    function fontCss(f) { return '"' + f.n + '", ' + f.g; }
+    var fontBag = [];
+    function nextFont() {
+      if (!fontBag.length) fontBag = shuffle(FONTS.slice());
+      return fontBag.pop();
+    }
+
+    // ── Posizionamento LIBERO (niente griglia): rettangoli random ────────────
+    // Vincoli: non si accavallano (sovrapposizione + distanza min) e nessuno
+    // sta sulla stessa linea di un altro (centri verticali distanziati).
+    var EDGE = 18;     // margine dai bordi schermo
+    var GAP = 18;      // distanza minima tra due blocchi
+    var LANE_TOL = 0;  // distanza minima tra i centri verticali (in buildLayout)
+    var MINW = 0, MAXW = 0, MINH = 0, MAXH = 0; // range dimensioni (in buildLayout)
+    var PADX = 10, MIN_FONT = 13, MAX_FONT = 400, LINE_HEIGHT_MUL = 1.12;
+
+    // ── Warp "Arco verticale" (Illustrator) ──────────────────────────────────
+    var BEND_MAX = 0.65;
+    var THETA_MAX = 1.9;
+    var LINE_REVEAL = 0.3; // le linee (colore testo) compaiono solo mentre il testo si apre
+
+    // ── Numero blocchi + ricambio (svanisce uno, ne nasce uno altrove) ───────
+    var TARGET_BLOCKS = 7; // sparsi, ruotati, grandezze diverse
+    var FADE_MS = 1100;       // dissolvenza nascita/morte
+    var CHURN_MIN = 8000, CHURN_MAX = 15000;
+    var churnTimer = CHURN_MIN;
+
+    // ── Layout a COLONNE che si aprono/chiudono (motion solo durante l'evento) ─
+    var GRID_MODE = true; // griglia mobile (colonne che si aprono/chiudono)
+    var ROWS = 3;             // righe fisse (altezze diverse, statiche)
+    var rowF = [];            // frazioni d'altezza delle righe (fisse)
+    var columns = [];         // colonne: { wgt, f, closing, boxes:[box per riga] }
+    var COLS_START = 3, COLS_MIN = 2, COLS_MAX = 5;
+    var COL_EVENT_MIN = 11000, COL_EVENT_MAX = 20000; // ogni quanto apri/chiudi una colonna (più lento)
+    var colEventTimer = COL_EVENT_MIN + Math.random() * (COL_EVENT_MAX - COL_EVENT_MIN);
+    var COL_ANIM = 1500;      // durata apertura/chiusura colonna (ms)
+    var BOX_GAP = 18;         // spazio fra i box (px)
+    var BOX_RADIUS = 16;      // raggio degli angoli arrotondati (px)
+    var TEXT_H_FRAC = 0.62;   // quota d'altezza del box occupabile dal testo
+
+    // ── Timing del ciclo (sfasato per blocco) ────────────────────────────────
+    var REST_MS = 16000, REST_JITTER = 9000; // 16-25s piatto (più tempo per leggere)
+    // Aperture variabili: ogni ciclo apre di una quantità e con durate diverse
+    var BEND_OPEN_MIN = 0.22;               // apertura minima (le più "accennate")
+    var OPEN_MIN = 1600, OPEN_MAX = 3400;   // durata apertura
+    var CLOSE_MIN = 1600, CLOSE_MAX = 3400; // durata chiusura
+
+    // ── 8 fps + motion blur ──────────────────────────────────────────────────
+    var TARGET_FPS = 8;
+    var FRAME_INTERVAL = 1000 / TARGET_FPS;
+    var frameAccumulator = 0, lastFrameT = 0;
+    var BLUR_FADE = 0.5;
+
+    // ── Util ──────────────────────────────────────────────────────────────────
+    function easeInOutCubic(t) { return t < 0.5 ? 4*t*t*t : 1 - Math.pow(-2*t + 2, 3) / 2; }
+    function shuffle(arr) {
+      for (var i = arr.length - 1; i > 0; i--) {
+        var j = Math.floor(Math.random() * (i + 1));
+        var tmp = arr[i]; arr[i] = arr[j]; arr[j] = tmp;
+      }
+      return arr;
+    }
+    function wrapText(mctx, text, maxWidth) {
+      var words = text.split(' '), lines = [], current = '';
+      for (var i = 0; i < words.length; i++) {
+        var test = current ? current + ' ' + words[i] : words[i];
+        if (mctx.measureText(test).width > maxWidth && current) {
+          lines.push(current); current = words[i];
+        } else current = test;
+      }
+      if (current) lines.push(current);
+      return lines;
+    }
+    function findMaxFontSize(mctx, text, maxW, maxH, ff) {
+      var low = MIN_FONT, high = MAX_FONT, best = MIN_FONT;
+      while (low <= high) {
+        var mid = (low + high) >> 1;
+        mctx.font = mid + 'px ' + ff;
+        var lh = Math.round(mid * LINE_HEIGHT_MUL);
+        var lines = wrapText(mctx, text, maxW);
+        var of = false;
+        for (var i = 0; i < lines.length; i++) {
+          if (mctx.measureText(lines[i]).width > maxW) { of = true; break; }
+        }
+        if (!of && lines.length * lh <= maxH) { best = mid; low = mid + 1; }
+        else high = mid - 1;
+      }
+      return best;
+    }
+
+    // ── Rettangoli random non sovrapposti ────────────────────────────────────
+    function randRange(a, b) { return a + Math.random() * (b - a); }
+    function rectsOverlap(a, b, gap) {
+      return !(a.x + a.w + gap <= b.x || b.x + b.w + gap <= a.x ||
+               a.y + a.h + gap <= b.y || b.y + b.h + gap <= a.y);
+    }
+    // Cerca una posizione libera per un rettangolo rw×rh (tenta più posizioni).
+    // Rifiuta se si sovrappone OPPURE se sta sulla stessa linea (centro verticale
+    // troppo vicino) di un blocco esistente.
+    function freeRect(rw, rh) {
+      // Overlap CONSENTITO ma non forzato: fra tante posizioni random scegliamo
+      // quella col centro più lontano dai blocchi già presenti → si sparpagliano
+      // e si accavallano solo parzialmente, senza ammucchiarsi al centro.
+      var best = null, bestD = -1;
+      for (var t = 0; t < 40; t++) {
+        var x = randRange(EDGE, Math.max(EDGE, W - EDGE - rw));
+        var y = randRange(EDGE, Math.max(EDGE, H - EDGE - rh));
+        var cx = x + rw / 2, cy = y + rh / 2;
+        var dmin = 1e18;
+        for (var i = 0; i < blocks.length; i++) {
+          var bx = blocks[i].rect.x + blocks[i].rect.w / 2;
+          var by = blocks[i].rect.y + blocks[i].rect.h / 2;
+          var dx = cx - bx, dy = cy - by, dd = dx * dx + dy * dy;
+          if (dd < dmin) dmin = dd;
+        }
+        if (dmin > bestD) { bestD = dmin; best = { x: x, y: y, w: rw, h: rh }; }
+      }
+      return best;
+    }
+
+    // ── Blocchi ───────────────────────────────────────────────────────────────
+    var blocks = [];
+    var activeTexts = {};
+    var layoutReady = false; // true solo dopo buildLayout (range dimensioni pronti)
+
+    function pickPhrase(curText) {
+      var cand = shuffle(PHRASES.slice());
+      for (var i = 0; i < cand.length; i++)
+        if (cand[i] !== curText && !activeTexts[cand[i]]) return cand[i];
+      for (var j = 0; j < cand.length; j++) if (cand[j] !== curText) return cand[j];
+      return cand[0];
+    }
+
+    // Rasterizza il testo nel COLORE TESTO, alle misure correnti del box.
+    // (Niente font nuovo: usato anche per il "refit" quando il box cambia dimensione.)
+    function renderBuffer(block) {
+      var ff = fontCss(block.font);
+      var font = findMaxFontSize(measCtx, block.text, block.pageW, block.pageMaxTextH, ff);
+      measCtx.font = font + 'px ' + ff;
+      var lines = wrapText(measCtx, block.text, block.pageW);
+      var lineHeight = Math.round(font * LINE_HEIGHT_MUL);
+      var n = lines.length;
+      var LT = Math.max(2, Math.round(font * 0.06)); // spessore linee
+      var padX = Math.round(font * 0.4), padY = Math.round(font * 0.22);
+      var topInset = Math.round((lineHeight - font) / 2); // centra il testo nella banda
+
+      // larghezza di ogni riga (lo sfondo segue ogni riga, a gradini, allineato a sinistra)
+      var lineW = [], maxLineW = 0, i;
+      for (i = 0; i < n; i++) { lineW[i] = measCtx.measureText(lines[i]).width; if (lineW[i] > maxLineW) maxLineW = lineW[i]; }
+      function bgW(i) { return Math.ceil(lineW[i]) + padX * 2; }
+
+      var bufW = Math.ceil(maxLineW) + padX * 2;
+      var bufH = n * lineHeight + padY * 2;
+
+      // Buffer: una banda colorata per riga (squadrata), allineata a sinistra, attaccate
+      // verticalmente → un'unica sagoma a gradini. Il bordo destro segue ogni riga.
+      var buf = document.createElement('canvas');
+      buf.width = bufW; buf.height = bufH;
+      var bc = buf.getContext('2d');
+      bc.fillStyle = block.boxColor;
+      for (i = 0; i < n; i++) {
+        var yTop = (i === 0) ? 0 : padY + i * lineHeight;          // la prima include il pad sopra
+        var yBot = (i === n - 1) ? bufH : padY + (i + 1) * lineHeight; // l'ultima il pad sotto
+        bc.fillRect(0, yTop, bgW(i), yBot - yTop);
+      }
+      bc.fillStyle = block.textColor;
+      bc.textBaseline = 'top';
+      bc.font = font + 'px ' + ff;
+      for (i = 0; i < n; i++) bc.fillText(lines[i], padX, padY + i * lineHeight + topInset);
+
+      // Linee (colore testo) sopra/sotto, larghe come la prima/ultima riga: solo in apertura
+      var lbuf = document.createElement('canvas');
+      lbuf.width = bufW; lbuf.height = bufH;
+      var lc = lbuf.getContext('2d');
+      lc.fillStyle = block.textColor;
+      lc.fillRect(0, 0, bgW(0), LT);
+      lc.fillRect(0, bufH - LT, bgW(n - 1), LT);
+
+      block.buf = buf; block.lineBuf = lbuf; block.bufW = bufW; block.bufH = bufH;
+      block.fitW = block.pageW; block.fitH = block.pageMaxTextH;
+    }
+
+    // Nuovo contenuto: nuova frase + nuovo font, poi rasterizza.
+    function makeBuffer(block, text) {
+      block.text = text;
+      block.font = nextFont();
+      renderBuffer(block);
+    }
+
+    function newBlock(text, alpha) {
+      var boxColor = nextColor();
+      var block = {
+        rect: { x: 0, y: 0, w: 10, h: 10 }, rw: 10, rh: 10, cellMargin: 1, cx: 0, cy: 0,
+        angle: 0, // niente rotazione in griglia
+        pageW: 60, pageMaxTextH: 40,
+        boxColor: boxColor, textColor: textColorFor(boxColor),
+        font: nextFont(), text: text, buf: null, lineBuf: null, bufW: 0, bufH: 0, fitW: 0, fitH: 0,
+        state: 'REST', bend: 0, swapped: false,
+        openBend: BEND_MAX, openMs: 2500, closeMs: 2500,
+        restMs: REST_MS + Math.random() * REST_JITTER,
+        stateTime: Math.random() * (REST_MS + REST_JITTER),
+        alpha: alpha, dying: false, _remove: false
+      };
+      activeTexts[text] = true;
+      blocks.push(block);
+      return block;
+    }
+
+    // Assegna misura/posizione al box; (ri)rasterizza il testo se la misura cambia.
+    function assignRect(block, rect) {
+      var M = Math.min(rect.w, rect.h) * 0.08;
+      block.rect = rect; block.rw = rect.w; block.rh = rect.h; block.cellMargin = M;
+      block.cx = rect.x + rect.w / 2; block.cy = rect.y + rect.h / 2;
+      var pw = Math.max(40, Math.round(rect.w - M * 2 - PADX * 2));
+      var ph = Math.max(30, Math.round((rect.h - M * 2) * TEXT_H_FRAC));
+      block.pageW = pw; block.pageMaxTextH = ph;
+      if (rect.w >= 36 && (!block.buf || Math.abs(pw - block.fitW) > 6 || Math.abs(ph - block.fitH) > 6))
+        renderBuffer(block);
+    }
+
+    // Prova a creare un blocco con dimensione random in un punto libero.
+    // initial=true → entra già pieno (alpha 1) all'avvio; altrimenti dissolvenza.
+    // Se non trova spazio rimpicciolisce progressivamente la forma.
+    function trySpawn(initial) {
+      for (var attempt = 0; attempt < 12; attempt++) {
+        var shrink = Math.max(0.82, 1 - attempt * 0.04); // non scende sotto l'82% del min
+        var rw = Math.min(randRange(MINW, MAXW) * shrink, W - 2 * EDGE);
+        var rh = Math.min(randRange(MINH, MAXH) * shrink, H - 2 * EDGE);
+        var cand = freeRect(rw, rh);
+        if (cand) { var bk = newBlock(pickPhrase(null), initial ? 1 : 0); assignRect(bk, cand); return bk; }
+      }
+      return null;
+    }
+
+    function swapText(bk) {
+      delete activeTexts[bk.text];
+      var nt = pickPhrase(bk.text);
+      activeTexts[nt] = true;
+      makeBuffer(bk, nt);
+    }
+
+    // Frazioni casuali (somma 1) per le misure di righe/colonne: dimensioni diverse.
+    function randFracs(n) {
+      var a = [], s = 0, i;
+      for (i = 0; i < n; i++) { a[i] = 0.6 + Math.random(); s += a[i]; } // 0.6..1.6
+      for (i = 0; i < n; i++) a[i] /= s;
+      return a;
+    }
+    // Una colonna con ROWS box (uno per riga). weight = peso (larghezza relativa).
+    function makeColumn(weight, startF, alpha) {
+      var col = { wgt: weight, f: startF, closing: false, boxes: [] };
+      for (var r = 0; r < ROWS; r++) col.boxes.push(newBlock(pickPhrase(null), alpha));
+      return col;
+    }
+    function colWeightSum() {
+      var s = 0; for (var i = 0; i < columns.length; i++) s += columns[i].wgt; return s;
+    }
+    // Posiziona ogni box secondo le frazioni correnti delle colonne (refit se serve).
+    function layoutColumns() {
+      var availW = W - 2 * EDGE, availH = H - 2 * EDGE;
+      // bordi riga (interi), fissi
+      var ry = [EDGE], acc = 0, r;
+      for (r = 0; r < ROWS; r++) { acc += rowF[r]; ry.push(EDGE + Math.round(availH * acc)); }
+      // colonne: bordi cumulativi arrotondati al pixel → box attaccati, senza spazi
+      var g = BOX_GAP, cxL = EDGE, accx = 0, ci;
+      for (ci = 0; ci < columns.length; ci++) {
+        accx += columns[ci].f;
+        var cxR = EDGE + Math.round(availW * accx);
+        for (r = 0; r < ROWS; r++) {
+          assignRect(columns[ci].boxes[r], {
+            x: cxL + g / 2, y: ry[r] + g / 2,
+            w: Math.max(1, (cxR - cxL) - g), h: Math.max(1, (ry[r + 1] - ry[r]) - g)
+          });
+        }
+        cxL = cxR;
+      }
+    }
+    // Apre una nuova colonna (larghezza 0 → cresce, le altre si stringono).
+    function openColumn() {
+      if (columns.length >= COLS_MAX) return;
+      var ci = Math.floor(Math.random() * (columns.length + 1));
+      columns.splice(ci, 0, makeColumn(0.6 + Math.random(), 0, 0));
+    }
+    // Chiude una colonna (larghezza → 0, poi rimossa).
+    function closeColumn() {
+      var open = [];
+      for (var i = 0; i < columns.length; i++) if (!columns[i].closing) open.push(i);
+      if (open.length <= COLS_MIN) return;
+      var col = columns[open[Math.floor(Math.random() * open.length)]];
+      col.closing = true; col.wgt = 0;
+    }
+    function columnEvent() {
+      var open = 0, i;
+      for (i = 0; i < columns.length; i++) if (!columns[i].closing) open++;
+      var canOpen = columns.length < COLS_MAX, canClose = open > COLS_MIN;
+      if (canOpen && (!canClose || Math.random() < 0.55)) openColumn();
+      else if (canClose) closeColumn();
+    }
+    // Anima le larghezze verso i pesi correnti; rimuove le colonne chiuse.
+    function updateColumns(dt) {
+      var sumW = colWeightSum(), k = Math.min(1, dt / COL_ANIM), i, sumF = 0;
+      for (i = 0; i < columns.length; i++) {
+        var t = sumW > 0 ? columns[i].wgt / sumW : 0;
+        columns[i].f += (t - columns[i].f) * k;
+        sumF += columns[i].f;
+      }
+      if (sumF > 0) for (i = 0; i < columns.length; i++) columns[i].f /= sumF;
+      for (i = columns.length - 1; i >= 0; i--) {
+        if (columns[i].closing && columns[i].f < 0.006) {
+          var bxs = columns[i].boxes;
+          for (var b2 = 0; b2 < bxs.length; b2++) {
+            var idx = blocks.indexOf(bxs[b2]);
+            if (idx >= 0) blocks.splice(idx, 1);
+            delete activeTexts[bxs[b2].text];
+          }
+          columns.splice(i, 1);
+        }
+      }
+    }
+    function initColumns() {
+      rowF = randFracs(ROWS);
+      columns = [];
+      var i, sw = 0;
+      for (i = 0; i < COLS_START; i++) { var w = 0.6 + Math.random(); columns.push(makeColumn(w, 0, 1)); sw += w; }
+      for (i = 0; i < columns.length; i++) columns[i].f = columns[i].wgt / sw; // parte a regime (ferma)
+      layoutColumns();
+    }
+
+    function buildLayout() {
+      blocks = []; activeTexts = {}; colorBag = []; fontBag = [];
+      if (GRID_MODE) {
+        initColumns();
+      } else {
+        MINW = 0.24 * W; MAXW = 0.46 * W;   // grandezze diverse, ma non troppo piccole
+        MINH = 0.18 * H; MAXH = 0.36 * H;
+        LANE_TOL = 0; // overlap consentito (ma non forzato, vedi freeRect)
+        var guard = 0, n = 0;
+        while (n < TARGET_BLOCKS && guard++ < 600) {
+          if (trySpawn(true)) n++; else break;
+        }
+      }
+      layoutReady = true;
+    }
+
+    // Path di un rettangolo con angoli arrotondati (raggio limitato a metà lato).
+    function roundRectPath(c, x, y, w, h, r) {
+      r = Math.max(0, Math.min(r, w / 2, h / 2));
+      c.beginPath();
+      c.moveTo(x + r, y);
+      c.arcTo(x + w, y, x + w, y + h, r);
+      c.arcTo(x + w, y + h, x, y + h, r);
+      c.arcTo(x, y + h, x, y, r);
+      c.arcTo(x, y, x + w, y, r);
+      c.closePath();
+    }
+
+    // ── Disegno: lo sfondo colorato è cucito nel buffer attorno al testo; warp + clip cella
+    function drawBlock(block) {
+      if (block.alpha <= 0 || !block.buf) return;
+      var R0 = block.rect; // cella: solo bounds/posizione (invisibile, resta il grigio)
+      if (R0.w < 1 || R0.h < 1) return;
+      var baseA = block.alpha < 0 ? 0 : (block.alpha > 1 ? 1 : block.alpha);
+
+      tCtx.globalAlpha = baseA;
+      tCtx.save();
+      var rot = block.angle || 0;
+      if (rot) { tCtx.translate(block.cx, block.cy); tCtx.rotate(rot); tCtx.translate(-block.cx, -block.cy); }
+
+      var bufW = block.bufW, bufH = block.bufH, halfH = bufH / 2;
+      var theta = Math.max(1e-3, block.bend * THETA_MAX);
+      var R = bufH / theta;
+      function warp(bx, by) {
+        var phi = (by - halfH) / R, rad = R + bx;
+        return { x: rad * Math.cos(phi) - R, y: rad * Math.sin(phi) };
+      }
+
+      var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+      var SAMP = 14, i, p;
+      for (i = 0; i <= SAMP; i++) {
+        var by = bufH * i / SAMP;
+        p = warp(0, by);    if (p.x<minX)minX=p.x; if(p.x>maxX)maxX=p.x; if(p.y<minY)minY=p.y; if(p.y>maxY)maxY=p.y;
+        p = warp(bufW, by); if (p.x<minX)minX=p.x; if(p.x>maxX)maxX=p.x; if(p.y<minY)minY=p.y; if(p.y>maxY)maxY=p.y;
+      }
+      for (i = 0; i <= SAMP; i++) {
+        var bx = bufW * i / SAMP;
+        p = warp(bx, 0);    if (p.x<minX)minX=p.x; if(p.x>maxX)maxX=p.x; if(p.y<minY)minY=p.y; if(p.y>maxY)maxY=p.y;
+        p = warp(bx, bufH); if (p.x<minX)minX=p.x; if(p.x>maxX)maxX=p.x; if(p.y<minY)minY=p.y; if(p.y>maxY)maxY=p.y;
+      }
+      var bboxCx = (minX + maxX) / 2, bboxCy = (minY + maxY) / 2;
+
+      // Box già a misura del testo → scala "flat" (max 1, mai ingrandito):
+      // niente rimpicciolimento aprendo, il ventaglio sborda ed è tagliato dalla cella.
+      var M = block.cellMargin;
+      var scale = Math.min(1, (block.rw - 2*M) / bufW, (block.rh - 2*M) / bufH);
+      if (!isFinite(scale) || scale <= 0) scale = 1;
+      var TX = block.cx - scale * bboxCx;
+      var TY = block.cy - scale * bboxCy;
+
+      // Linee (colore testo) visibili SOLO mentre il testo si muove
+      var lineA = Math.min(1, (block.bend / BEND_MAX) / LINE_REVEAL);
+
+      var NV = Math.max(6, Math.min(28, Math.round(theta * 14) + 5));
+      var OVER = 0.8, bw = bufW, b;
+      for (b = 0; b < NV; b++) {
+        var ys = bufH * b / NV;
+        var ye = bufH * (b + 1) / NV;
+        var yeOv = Math.min(bufH, ye + OVER);
+
+        var D0 = warp(0, ys), D1 = warp(bw, ys), D2 = warp(0, yeOv), D3 = warp(bw, yeOv);
+        var a = (D1.x - D0.x) / bw, bb = (D1.y - D0.y) / bw;
+        var cc = (D2.x - D0.x) / (yeOv - ys), dd = (D2.y - D0.y) / (yeOv - ys);
+        var e = D0.x - cc * ys, f = D0.y - dd * ys;
+
+        var S0x = scale*D0.x+TX, S0y = scale*D0.y+TY;
+        var S1x = scale*D1.x+TX, S1y = scale*D1.y+TY;
+        var S3x = scale*D3.x+TX, S3y = scale*D3.y+TY;
+        var S2x = scale*D2.x+TX, S2y = scale*D2.y+TY;
+
+        tCtx.save();
+        tCtx.beginPath();
+        tCtx.moveTo(S0x, S0y); tCtx.lineTo(S1x, S1y);
+        tCtx.lineTo(S3x, S3y); tCtx.lineTo(S2x, S2y);
+        tCtx.closePath();
+        tCtx.clip();
+        tCtx.transform(scale*a, scale*bb, scale*cc, scale*dd, scale*e+TX, scale*f+TY);
+        tCtx.drawImage(block.buf, 0, 0);
+        if (lineA > 0.01 && block.lineBuf) {
+          tCtx.globalAlpha = baseA * lineA;
+          tCtx.drawImage(block.lineBuf, 0, 0);
+        }
+        tCtx.restore();
+      }
+      tCtx.restore(); // fine rotazione
+      tCtx.globalAlpha = 1;
+    }
+
+    function updateBlocks(dt) {
+      if (!layoutReady) return; // niente spawn finché i range dimensioni non sono pronti
+      // Cambio configurazione: dopo un po' il numero di blocchi cambia (4 / 6 / 12)
+      if (GRID_MODE) {
+        colEventTimer -= dt;
+        if (colEventTimer <= 0) {
+          colEventTimer = COL_EVENT_MIN + Math.random() * (COL_EVENT_MAX - COL_EVENT_MIN);
+          columnEvent();
+        }
+        updateColumns(dt); // anima le larghezze, rimuove le colonne chiuse
+        layoutColumns();   // posiziona i box (refit se la misura cambia)
+      }
+      // Ricambio (solo modalità libera): ogni tanto un blocco a riposo svanisce
+      if (!GRID_MODE) {
+        churnTimer -= dt;
+        if (churnTimer <= 0) {
+          churnTimer = CHURN_MIN + Math.random() * (CHURN_MAX - CHURN_MIN);
+          var cands = [];
+          for (var i = 0; i < blocks.length; i++) {
+            var b = blocks[i];
+            if (!b.dying && b.alpha >= 1 && b.state === 'REST') cands.push(b);
+          }
+          if (cands.length > 2) cands[Math.floor(Math.random() * cands.length)].dying = true;
+        }
+      }
+
+      var removed = false;
+      for (var k = 0; k < blocks.length; k++) {
+        var bk = blocks[k];
+        bk.stateTime += dt;
+
+        if (bk.dying) { bk.alpha -= dt / FADE_MS; if (bk.alpha <= 0) { bk.alpha = 0; bk._remove = true; removed = true; } }
+        else if (bk.alpha < 1) bk.alpha = Math.min(1, bk.alpha + dt / FADE_MS);
+
+        if (bk.state === 'REST') {
+          bk.bend = 0;
+          if (bk.stateTime >= bk.restMs) {
+            // nuovo ciclo: apertura e durate casuali → ogni apertura è diversa
+            bk.state = 'OPENING'; bk.stateTime = 0; bk.swapped = false;
+            bk.openBend = randRange(BEND_OPEN_MIN, BEND_MAX);
+            bk.openMs = randRange(OPEN_MIN, OPEN_MAX);
+            bk.closeMs = randRange(CLOSE_MIN, CLOSE_MAX);
+          }
+        } else if (bk.state === 'OPENING') {
+          var po = Math.min(1, bk.stateTime / bk.openMs);
+          bk.bend = bk.openBend * easeInOutCubic(po);
+          if (po >= 1) {
+            // cambio testo al MASSIMO dell'apertura di questo ciclo
+            if (!bk.swapped) { swapText(bk); bk.swapped = true; }
+            bk.state = 'CLOSING'; bk.stateTime = 0; bk.bend = bk.openBend;
+          }
+        } else {
+          var pc = Math.min(1, bk.stateTime / bk.closeMs);
+          bk.bend = bk.openBend * (1 - easeInOutCubic(pc));
+          if (pc >= 1) {
+            if (!bk.swapped) swapText(bk); // sicurezza
+            bk.bend = 0; bk.state = 'REST'; bk.stateTime = 0; bk.swapped = false;
+            bk.restMs = REST_MS + Math.random() * REST_JITTER;
+          }
+        }
+      }
+
+      if (removed) {
+        for (var j = blocks.length - 1; j >= 0; j--) {
+          if (blocks[j]._remove) {
+            delete activeTexts[blocks[j].text];
+            blocks.splice(j, 1);
+          }
+        }
+      }
+
+      // Rimpiazza i mancanti (solo modalità libera) → nuovo blocco altrove
+      if (!GRID_MODE) {
+        var living = 0;
+        for (var m = 0; m < blocks.length; m++) if (!blocks[m].dying) living++;
+        var g = 0;
+        while (living < TARGET_BLOCKS && g++ < TARGET_BLOCKS) {
+          if (trySpawn(false)) living++; else break;
+        }
+      }
+    }
+
+    function drawPages() {
+      tCtx.setTransform(1, 0, 0, 1, 0, 0);
+      tCtx.globalAlpha = 1;
+      tCtx.globalCompositeOperation = 'source-over';
+      tCtx.clearRect(0, 0, W, H);
+      // prima i box fermi, poi quelli che si stanno aprendo → sbordano SOPRA i vicini
+      var i;
+      for (i = 0; i < blocks.length; i++) if (blocks[i].bend <= 0.001) drawBlock(blocks[i]);
+      for (i = 0; i < blocks.length; i++) if (blocks[i].bend > 0.001) drawBlock(blocks[i]);
+      tCtx.setTransform(1, 0, 0, 1, 0, 0);
+    }
+
+    // I buffer sono "fotografie" raster del testo: i font DEVONO essere già
+    // caricati prima di disegnarli, altrimenti il glifo cambierebbe dopo lo
+    // scatto. Aspettiamo document.fonts (con fallback a timeout) e poi costruiamo.
+    var _built = false;
+    function buildOnce() { if (_built) return; _built = true; buildLayout(); }
+    (function loadFonts() {
+      if (document.fonts && document.fonts.load) {
+        var loads = FONTS.map(function (f) { return document.fonts.load('24px "' + f.n + '"'); });
+        Promise.all(loads).then(buildOnce).catch(buildOnce);
+      }
+      setTimeout(buildOnce, 3500); // fallback se i font tardano/non arrivano
+    })();
+
+    // ── Eraser (masse — multi-blob via background subtraction) ───────────────
+    var ERASER_R = 60;            // gomma più grande: traccia "umana" non da indice
+    var lastErasePos = {};        // { 'P1': {x,y}, 'P2': {x,y}, ... }
+    var strokes = [];             // [{ label: 'P1', points: [{x,y}, ...] }, ...]
+    var currentStroke = {};       // { 'P1': <stroke obj>, ... }
+    var MIN_PATH_DIST = 4;        // px minimi tra punti consecutivi registrati
+
+    // ── Tracker per persone (ID numerici persistenti) ────────────────────────
+    var trackedPersons = {};      // { id (string): { x, y, w, h, score, lastFrame } }
+    var nextPersonId = 1;
+    var trackFrameN = 0;
+    var TRACK_DEATH_FRAMES = 15;  // ~0.5s a 30fps: tolleranza occlusioni brevi
+    function trackMatchDistSq() {
+      var d = Math.min(W, H) * 0.3;
+      return d * d;
+    }
+
+    // detections: [{ x, y, w, h, score, x1, y1, x2, y2 }]  in canvas px
+    // Restituisce: array di ID stringhe ('1', '2', ...) assegnate ad ogni detection
+    function assignPersonIds(detections) {
+      trackFrameN++;
+      var ids = new Array(detections.length).fill(null);
+      var usedIds = {};
+      var maxDistSq = trackMatchDistSq();
+
+      // 1) match greedy per distanza minima
+      var pairs = [];
+      for (var i = 0; i < detections.length; i++) {
+        for (var key in trackedPersons) {
+          var t = trackedPersons[key];
+          var dx = detections[i].x - t.x, dy = detections[i].y - t.y;
+          pairs.push({ dist: dx * dx + dy * dy, det: i, id: key });
+        }
+      }
+      pairs.sort(function (a, b) { return a.dist - b.dist; });
+      for (var k = 0; k < pairs.length; k++) {
+        var p = pairs[k];
+        if (ids[p.det] !== null) continue;
+        if (usedIds[p.id]) continue;
+        if (p.dist > maxDistSq) continue;
+        ids[p.det] = p.id;
+        usedIds[p.id] = true;
+      }
+
+      // 2) detection non matchate → nuovo ID incrementale
+      for (var i2 = 0; i2 < detections.length; i2++) {
+        if (ids[i2] !== null) continue;
+        ids[i2] = String(nextPersonId++);
+      }
+
+      // 3) aggiorna trackedPersons + mantieni i recenti non visti
+      var next = {};
+      for (var i3 = 0; i3 < detections.length; i3++) {
+        next[ids[i3]] = {
+          x: detections[i3].x, y: detections[i3].y,
+          w: detections[i3].w, h: detections[i3].h,
+          score: detections[i3].score,
+          x1: detections[i3].x1, y1: detections[i3].y1,
+          x2: detections[i3].x2, y2: detections[i3].y2,
+          lastFrame: trackFrameN
+        };
+      }
+      for (var key2 in trackedPersons) {
+        if (!next[key2] &&
+            trackFrameN - trackedPersons[key2].lastFrame < TRACK_DEATH_FRAMES) {
+          next[key2] = trackedPersons[key2];
+        }
+      }
+      trackedPersons = next;
+
+      return ids;
+    }
+
+    // stampErase con raggio variabile: ogni massa cancella col suo ingombro
+    function stampErase(lx, ly, r) {
+      r = r || ERASER_R;
+      mCtx.globalCompositeOperation = 'destination-out';
+      var g = mCtx.createRadialGradient(lx, ly, 0, lx, ly, r);
+      g.addColorStop(0,    'rgba(0,0,0,0.28)');
+      g.addColorStop(0.45, 'rgba(0,0,0,0.16)');
+      g.addColorStop(0.80, 'rgba(0,0,0,0.06)');
+      g.addColorStop(1,    'rgba(0,0,0,0)');
+      mCtx.fillStyle = g;
+      mCtx.beginPath();
+      mCtx.arc(lx, ly, r, 0, Math.PI * 2);
+      mCtx.fill();
+      mCtx.globalCompositeOperation = 'source-over';
+    }
+
+    // erasePerson — coordinate canvas + raggio di ingombro della massa
+    function erasePerson(lx, ly, label, r) {
+      r = r || ERASER_R;
+      var prev = lastErasePos[label];
+      if (prev) {
+        var dx = lx - prev.x, dy = ly - prev.y;
+        var dist = Math.sqrt(dx * dx + dy * dy);
+        var step = r * 0.4;
+        var n = Math.max(1, Math.ceil(dist / step));
+        for (var s = 1; s <= n; s++) {
+          var t = s / n;
+          stampErase(prev.x + dx * t, prev.y + dy * t, r);
+        }
+        var cs = currentStroke[label];
+        if (cs) {
+          var lp = cs.points[cs.points.length - 1];
+          var px = lx - lp.x, py = ly - lp.y;
+          if (px * px + py * py >= MIN_PATH_DIST * MIN_PATH_DIST) {
+            cs.points.push({ x: lx, y: ly });
+          }
+        }
+      } else {
+        stampErase(lx, ly, r);
+        var s = { label: label, points: [{ x: lx, y: ly }] };
+        currentStroke[label] = s;
+        strokes.push(s);
+      }
+      lastErasePos[label] = { x: lx, y: ly };
+    }
+
+    // ── Ticker: scritta che scorre lentamente in basso (titolo) ──────────────
+    var TICKER_TEXT = 'Sciuscella — Un percorso di resistenza culturale 11.09.2026';
+    var TICKER_FONT = '"Neue Haas Grotesk Display Pro","Neue Haas Grotesk Text Pro",' +
+                      '"Helvetica Neue",Helvetica,Arial,sans-serif';
+    var TICKER_FS = Math.max(20, Math.round(H * 0.045)); // "abbastanza grande"
+    var TICKER_SPEED = 45;                 // px/s (scorre lentamente)
+    var TICKER_GAP = Math.round(W * 0.12); // spazio fra le ripetizioni
+    var tickerOffset = 0, tickerPeriod = 0;
+
+    function updateTicker(dt) {
+      if (!tickerPeriod) return; // larghezza misurata al primo disegno
+      tickerOffset += TICKER_SPEED * dt / 1000;
+      if (tickerOffset >= tickerPeriod) tickerOffset -= tickerPeriod;
+    }
+    function drawTicker(c) {
+      c.save();
+      c.setTransform(1, 0, 0, 1, 0, 0);
+      c.globalAlpha = 1;
+      c.font = TICKER_FS + 'px ' + TICKER_FONT;
+      c.textAlign = 'left';
+      c.textBaseline = 'alphabetic';
+      c.fillStyle = '#1a1a1a'; // scuro: leggibile sul grigio chiaro
+      if (!tickerPeriod) tickerPeriod = c.measureText(TICKER_TEXT).width + TICKER_GAP;
+      var y = H - Math.round(H * 0.02);
+      for (var x = -(tickerOffset % tickerPeriod); x < W; x += tickerPeriod) {
+        c.fillText(TICKER_TEXT, x, y);
+      }
+      c.restore();
+    }
+
+    // ── Render loop (blocchi 8 fps, ticker fluido) ───────────────────────────
+    function render() {
+      requestAnimationFrame(render);
+      var now = performance.now();
+      var dt = lastFrameT ? Math.min(200, now - lastFrameT) : FRAME_INTERVAL;
+      lastFrameT = now;
+
+      updateTicker(dt); // ogni frame → scorrimento fluido
+
+      frameAccumulator += dt; // blocchi: throttle a TARGET_FPS
+      if (frameAccumulator >= FRAME_INTERVAL) {
+        var stepDt = frameAccumulator; frameAccumulator = 0;
+        updateBlocks(stepDt);
+        drawPages();
+      }
+
+      ctx.clearRect(0, 0, W, H);
+      ctx.drawImage(textLayer, 0, 0);
+      ctx.drawImage(maskLayer, 0, 0);
+      drawTicker(ctx); // sempre visibile, sopra tutto, in basso
+
+      // texture di pagina (grana fine) sopra tutto → resa "stampata"
+      ctx.save();
+      ctx.globalCompositeOperation = 'multiply';
+      ctx.globalAlpha = GRAIN_ALPHA;
+      ctx.drawImage(grainLayer, 0, 0);
+      ctx.restore();
+    }
+
+    // ── Blob tracking via background subtraction (niente ML) ─────────────────
+    // Lo sfondo viene "fotografato" alla calibrazione. Ogni frame nuovo viene
+    // confrontato pixel per pixel: le zone diverse sono "masse" in movimento.
+    // Ogni massa ha centroide + raggio di ingombro (cerchio equivalente).
+    var video        = document.getElementById('video');
+    var loading      = document.getElementById('loading');
+    var loadingMsg   = document.getElementById('loadingMsg');
+    var ready        = false;
+
+    // Configurazione
+    var PROC_W = 160, PROC_H = 90;     // risoluzione di analisi (bassa = veloce + denoise)
+    var DIFF_THRESHOLD       = 28;     // differenza grigio 0-255 per dire "pixel cambiato"
+    var MIN_BLOB_FRAC        = 0.004;  // area minima blob (frazione del frame) — sotto = rumore
+    var MAX_BLOB_FRAC        = 0.45;   // sopra = probabile cambio di luce, ignora
+    var MAX_BLOBS            = 8;      // massimo masse tracciate per frame
+    var BG_ADAPT             = 0.015;  // adattamento lento dello sfondo nelle zone statiche
+    var DETECTION_TARGET_FPS = 30;
+    var MIRROR_VIDEO         = true;   // selfie mode (spegni per camera dall'alto)
+
+    // Buffer di lavoro
+    var procCanvas = document.createElement('canvas');
+    procCanvas.width = PROC_W; procCanvas.height = PROC_H;
+    var procCtx = procCanvas.getContext('2d', { willReadFrequently: true });
+
+    var bgGray   = new Float32Array(PROC_W * PROC_H);  // sfondo di riferimento
+    var curGray  = new Float32Array(PROC_W * PROC_H);  // frame corrente
+    var diffMask = new Uint8Array(PROC_W * PROC_H);    // 1 = pixel diverso dallo sfondo
+    var blobLbl  = new Int32Array(PROC_W * PROC_H);    // etichette connected components
+    var bgReady  = false;
+    var detecting = false;
+
+    // Stat per il diag overlay
+    var lastDetections = [];
+    var detectFps = 0;
+    var detectFpsAccum = 0, detectFpsCount = 0, detectFpsLast = 0;
+
+    // ── Calibrazione sfondo: cattura il frame corrente come riferimento ───
+    function calibrateBackground() {
+      if (video.readyState < 2) return false;
+      grabGray(bgGray);
+      bgReady = true;
+      // feedback flash sul bottone
+      var b = document.getElementById('btnCalibrate');
+      if (b) {
+        b.classList.add('on');
+        setTimeout(function () { b.classList.remove('on'); }, 600);
+      }
+      return true;
+    }
+
+    // Disegna il video sul proc canvas e ne estrae la luminanza
+    function grabGray(target) {
+      procCtx.save();
+      if (MIRROR_VIDEO) {
+        procCtx.scale(-1, 1);
+        procCtx.drawImage(video, -PROC_W, 0, PROC_W, PROC_H);
+      } else {
+        procCtx.drawImage(video, 0, 0, PROC_W, PROC_H);
+      }
+      procCtx.restore();
+      var data = procCtx.getImageData(0, 0, PROC_W, PROC_H).data;
+      for (var i = 0, p = 0; i < target.length; i++, p += 4) {
+        // luminanza approssimata (pesi interi veloci)
+        target[i] = (data[p] * 3 + data[p + 1] * 6 + data[p + 2]) * 0.1;
+      }
+    }
+
+    // ── Avvio webcam + supporto multi-camera (per Iriun/DroidCam) ─────────
+    var videoDevices  = [];
+    var currentCamIdx = 0;
+
+    async function listVideoDevices() {
+      var devs = await navigator.mediaDevices.enumerateDevices();
+      videoDevices = devs.filter(function (d) { return d.kind === 'videoinput'; });
+      return videoDevices;
+    }
+
+    async function useCamera(idx) {
+      if (videoDevices.length === 0) return;
+      var n = videoDevices.length;
+      currentCamIdx = ((idx % n) + n) % n;
+      var device = videoDevices[currentCamIdx];
+
+      if (video.srcObject) {
+        var tracks = video.srcObject.getTracks();
+        for (var t = 0; t < tracks.length; t++) tracks[t].stop();
+      }
+
+      var stream = await navigator.mediaDevices.getUserMedia({
+        video: { deviceId: { exact: device.deviceId }, width: 1280, height: 720 },
+        audio: false
+      });
+      video.srcObject = stream;
+      await new Promise(function (resolve) { video.onloadedmetadata = resolve; });
+      await video.play();
+
+      var btnCam = document.getElementById('btnCam');
+      var label = device.label || ('camera ' + (currentCamIdx + 1));
+      btnCam.title = (currentCamIdx + 1) + '/' + n + ' — ' + label +
+                     ' (click per la prossima)';
+      btnCam.textContent = '📷 Cam ' + (currentCamIdx + 1) + '/' + n;
+    }
+
+    async function initCamera() {
+      try {
+        // Probe per ottenere permessi (label rimangono vuoti senza permesso)
+        var probe = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        probe.getTracks().forEach(function (t) { t.stop(); });
+
+        await listVideoDevices();
+        if (videoDevices.length === 0) throw new Error('Nessuna webcam trovata');
+        await useCamera(0);
+        loadingMsg.textContent = 'Pronto';
+      } catch (e) {
+        console.error('[camera init]', e);
+        loadingMsg.textContent = 'Errore webcam: ' + (e.message || e);
+      }
+    }
+
+    // ── Detection: diff con lo sfondo → connected components → blob ────────
+    // Ritorna [{x, y, r, score, x1, y1, x2, y2}] in px canvas.
+    // r = raggio del cerchio di ingombro (cerchio di area equivalente al blob).
+    var ffStack = new Int32Array(PROC_W * PROC_H); // stack flood fill riusabile
+
+    function detectFrame() {
+      if (!bgReady || video.readyState < 2) return [];
+
+      grabGray(curGray);
+
+      // 1) maschera differenza + adattamento lento dello sfondo dove statico
+      var n = PROC_W * PROC_H;
+      for (var i = 0; i < n; i++) {
+        var d = curGray[i] - bgGray[i];
+        if (d < 0) d = -d;
+        if (d > DIFF_THRESHOLD) {
+          diffMask[i] = 1;
+        } else {
+          diffMask[i] = 0;
+          // il pixel è fermo → lo sfondo si aggiorna piano (compensa derive luce)
+          bgGray[i] += (curGray[i] - bgGray[i]) * BG_ADAPT;
+        }
+      }
+
+      // 2) connected components (4-connettività, flood fill iterativo)
+      blobLbl.fill(0);
+      var blobs = [];
+      var nextLbl = 0;
+      var minArea = Math.max(4, Math.round(n * MIN_BLOB_FRAC));
+      var maxArea = Math.round(n * MAX_BLOB_FRAC);
+
+      for (var start = 0; start < n; start++) {
+        if (diffMask[start] !== 1 || blobLbl[start] !== 0) continue;
+        nextLbl++;
+        var sp = 0;
+        ffStack[sp++] = start;
+        blobLbl[start] = nextLbl;
+
+        var area = 0, sumX = 0, sumY = 0;
+        var minX = PROC_W, maxX = 0, minY = PROC_H, maxY = 0;
+
+        while (sp > 0) {
+          var idx = ffStack[--sp];
+          var px = idx % PROC_W;
+          var py = (idx / PROC_W) | 0;
+
+          area++;
+          sumX += px; sumY += py;
+          if (px < minX) minX = px;
+          if (px > maxX) maxX = px;
+          if (py < minY) minY = py;
+          if (py > maxY) maxY = py;
+
+          // vicini: sinistra, destra, sopra, sotto
+          if (px > 0          && diffMask[idx - 1]      === 1 && blobLbl[idx - 1]      === 0) { blobLbl[idx - 1]      = nextLbl; ffStack[sp++] = idx - 1; }
+          if (px < PROC_W - 1 && diffMask[idx + 1]      === 1 && blobLbl[idx + 1]      === 0) { blobLbl[idx + 1]      = nextLbl; ffStack[sp++] = idx + 1; }
+          if (py > 0          && diffMask[idx - PROC_W] === 1 && blobLbl[idx - PROC_W] === 0) { blobLbl[idx - PROC_W] = nextLbl; ffStack[sp++] = idx - PROC_W; }
+          if (py < PROC_H - 1 && diffMask[idx + PROC_W] === 1 && blobLbl[idx + PROC_W] === 0) { blobLbl[idx + PROC_W] = nextLbl; ffStack[sp++] = idx + PROC_W; }
+        }
+
+        if (area < minArea || area > maxArea) continue;
+        blobs.push({
+          area: area,
+          cx: sumX / area, cy: sumY / area,
+          minX: minX, maxX: maxX, minY: minY, maxY: maxY
+        });
+      }
+
+      // 3) i blob più grandi prima, max MAX_BLOBS
+      blobs.sort(function (a, b) { return b.area - a.area; });
+      if (blobs.length > MAX_BLOBS) blobs.length = MAX_BLOBS;
+
+      // 4) mappa in coordinate canvas + raggio di ingombro
+      var sx = W / PROC_W, sy = H / PROC_H;
+      var sAvg = (sx + sy) / 2;
+      var out = [];
+      for (var b = 0; b < blobs.length; b++) {
+        var bl = blobs[b];
+        var rProc = Math.sqrt(bl.area / Math.PI);  // raggio cerchio equivalente
+        out.push({
+          x: (bl.cx + 0.5) * sx,
+          y: (bl.cy + 0.5) * sy,
+          r: Math.max(30, rProc * sAvg),           // raggio in px canvas (min 30)
+          x1: bl.minX * sx, y1: bl.minY * sy,
+          x2: (bl.maxX + 1) * sx, y2: (bl.maxY + 1) * sy,
+          score: bl.area / n                       // "score" = frazione di frame occupata
+        });
+      }
+      return out;
+    }
+
+    // ── Loop di tracking ──────────────────────────────────────────────────
+    function trackingLoop() {
+      if (!detecting && video.readyState >= 2) {
+        detecting = true;
+        try {
+          var detections = detectFrame();
+
+          // FPS
+          var now = performance.now();
+          if (detectFpsLast > 0) {
+            detectFpsAccum += now - detectFpsLast;
+            detectFpsCount++;
+            if (detectFpsAccum >= 500) {
+              detectFps = Math.round(1000 / (detectFpsAccum / detectFpsCount));
+              detectFpsAccum = 0; detectFpsCount = 0;
+            }
+          }
+          detectFpsLast = now;
+
+          // ID stabili per massa
+          var ids = assignPersonIds(detections);
+
+          // Erase per ogni massa, col suo raggio di ingombro
+          var seen = {};
+          for (var i = 0; i < detections.length; i++) {
+            var label = 'P' + ids[i];
+            seen[label] = true;
+            erasePerson(detections[i].x, detections[i].y, label, detections[i].r);
+            detections[i].id = ids[i];
+          }
+
+          // Masse sparite questo frame → chiude la loro stroke
+          for (var key in lastErasePos) {
+            if (!seen[key] && lastErasePos[key]) {
+              lastErasePos[key] = null;
+              delete lastErasePos[key];
+              currentStroke[key] = null;
+              delete currentStroke[key];
+            }
+          }
+
+          lastDetections = detections;
+          drawDiagnostic(detections);
+
+          if (!ready) {
+            ready = true;
+            loading.style.display = 'none';
+          }
+        } catch (e) {
+          console.error('[blob detect]', e);
+        }
+        detecting = false;
+      }
+      setTimeout(trackingLoop, Math.max(15, Math.round(1000 / DETECTION_TARGET_FPS)));
+    }
+
+    // Boot
+    (async function boot() {
+      await initCamera();
+      // Auto-calibrazione dopo 1.5s: dà tempo all'esposizione di stabilizzarsi.
+      // Se sei in scena verrai "cotto" nello sfondo: esci e premi 🎯 Calibra (B).
+      setTimeout(function () { calibrateBackground(); }, 1500);
+      trackingLoop();
+    })();
+
+    // ── Export SVG del percorso mano ─────────────────────────────────────────
+    // ── Smoothing della stroke: 1 passo WMA + Catmull-Rom con tensione media ─
+    var SMOOTH_PASSES   = 1;   // era 3 — meno passi = curve meno "tirate"
+    var CR_DIVISOR      = 10;  // era 6 — divisore più alto = curve più strette
+    var STROKE_WIDTH    = 1.0; // era 0.5 — tratto raddoppiato
+
+    function smoothPoints(points, passes) {
+      if (points.length < 3) return points.slice();
+      var result = points.slice();
+      for (var p = 0; p < passes; p++) {
+        var next = [result[0]];
+        for (var i = 1; i < result.length - 1; i++) {
+          next.push({
+            x: (result[i-1].x + 2 * result[i].x + result[i+1].x) / 4,
+            y: (result[i-1].y + 2 * result[i].y + result[i+1].y) / 4
+          });
+        }
+        next.push(result[result.length - 1]);
+        result = next;
+      }
+      return result;
+    }
+
+    // Catmull-Rom (tensione 0) → cubic Bezier per ogni segmento
+    function strokeToSmoothPath(pts) {
+      if (!pts || pts.length === 0) return '';
+      if (pts.length === 1) {
+        return 'M' + pts[0].x.toFixed(2) + ',' + pts[0].y.toFixed(2);
+      }
+      var d = 'M' + pts[0].x.toFixed(2) + ',' + pts[0].y.toFixed(2);
+      if (pts.length === 2) {
+        return d + ' L' + pts[1].x.toFixed(2) + ',' + pts[1].y.toFixed(2);
+      }
+      for (var i = 0; i < pts.length - 1; i++) {
+        var p0 = pts[Math.max(0, i - 1)];
+        var p1 = pts[i];
+        var p2 = pts[i + 1];
+        var p3 = pts[Math.min(pts.length - 1, i + 2)];
+        var cp1x = p1.x + (p2.x - p0.x) / CR_DIVISOR;
+        var cp1y = p1.y + (p2.y - p0.y) / CR_DIVISOR;
+        var cp2x = p2.x - (p3.x - p1.x) / CR_DIVISOR;
+        var cp2y = p2.y - (p3.y - p1.y) / CR_DIVISOR;
+        d += ' C' + cp1x.toFixed(2) + ',' + cp1y.toFixed(2) +
+             ' '  + cp2x.toFixed(2) + ',' + cp2y.toFixed(2) +
+             ' '  + p2.x.toFixed(2)  + ',' + p2.y.toFixed(2);
+      }
+      return d;
+    }
+
+    // ── Export SVG: per mano singola o tutte e due ───────────────────────────
+    // labelFilter: 'Left' | 'Right' | 'all'
+    function exportSvgFor(labelFilter) {
+      var pickedStrokes = labelFilter === 'all'
+        ? strokes
+        : strokes.filter(function (s) { return s.label === labelFilter; });
+
+      // Solo stroke che hanno almeno 2 punti
+      pickedStrokes = pickedStrokes.filter(function (s) { return s.points.length >= 2; });
+      if (pickedStrokes.length === 0) return;
+
+      var pathEls = pickedStrokes.map(function (s) {
+        var smoothed = smoothPoints(s.points, SMOOTH_PASSES);
+        var d = strokeToSmoothPath(smoothed);
+        return '<path d="' + d + '" fill="none" stroke="black" stroke-width="' + STROKE_WIDTH + '" ' +
+               'stroke-linejoin="round" stroke-linecap="round"/>';
+      }).join('');
+
+      var svg = '<?xml version="1.0" encoding="UTF-8"?>\n' +
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ' + W + ' ' + H + '" ' +
+        'width="' + W + '" height="' + H + '">' + pathEls + '</svg>';
+
+      var blob = new Blob([svg], { type: 'image/svg+xml' });
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement('a');
+      a.href = url;
+      a.download = 'prova2-path-' + labelFilter +
+                   '-' + new Date().toISOString().replace(/[:.]/g, '-') + '.svg';
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+    }
+
+    function clearPath() {
+      strokes.length = 0;
+      currentStroke = {};
+      lastErasePos = {};
+      mCtx.globalCompositeOperation = 'source-over';
+      mCtx.fillStyle = PAGE_BG; mCtx.fillRect(0, 0, W, H);
+    }
+    function revealAll() {
+      mCtx.globalCompositeOperation = 'source-over';
+      mCtx.clearRect(0, 0, W, H);
+    }
+
+    // ── Export poster A4 (PNG, sfondo trasparente) ───────────────────────────
+    // Composizione generativa: 4-5 frasi grandi, colori/font/dimensioni diversi,
+    // aperture (warp) miste ma sempre almeno un po' aperte, possono sovrapporsi.
+    function buildPosterBuffer(text, boxColor, font, pageW, pageMaxTextH) {
+      var ff = fontCss(font);
+      var low = 16, high = 820, best = 16;
+      while (low <= high) {
+        var mid = (low + high) >> 1;
+        measCtx.font = mid + 'px ' + ff;
+        var lh = Math.round(mid * LINE_HEIGHT_MUL);
+        var ls = wrapText(measCtx, text, pageW);
+        var of = false;
+        for (var k = 0; k < ls.length; k++) if (measCtx.measureText(ls[k]).width > pageW) { of = true; break; }
+        if (!of && ls.length * lh <= pageMaxTextH) { best = mid; low = mid + 1; } else high = mid - 1;
+      }
+      var fs = best;
+      measCtx.font = fs + 'px ' + ff;
+      var lines = wrapText(measCtx, text, pageW);
+      var n = lines.length;
+      var lineHeight = Math.round(fs * LINE_HEIGHT_MUL);
+      var padX = Math.round(fs * 0.4), padY = Math.round(fs * 0.22);
+      var topInset = Math.round((lineHeight - fs) / 2);
+      var textColor = textColorFor(boxColor);
+
+      // larghezza di ogni riga → sfondo "a gradini" per riga, allineato a sinistra
+      var lineW = [], maxLineW = 0, i;
+      for (i = 0; i < n; i++) { lineW[i] = measCtx.measureText(lines[i]).width; if (lineW[i] > maxLineW) maxLineW = lineW[i]; }
+      function bgW(i) { return Math.ceil(lineW[i]) + padX * 2; }
+
+      var bufW = Math.ceil(maxLineW) + padX * 2;
+      var bufH = n * lineHeight + padY * 2;
+
+      var buf = document.createElement('canvas');
+      buf.width = bufW; buf.height = bufH;
+      var bc = buf.getContext('2d');
+      bc.fillStyle = boxColor;
+      for (i = 0; i < n; i++) {
+        var yTop = (i === 0) ? 0 : padY + i * lineHeight;
+        var yBot = (i === n - 1) ? bufH : padY + (i + 1) * lineHeight;
+        bc.fillRect(0, yTop, bgW(i), yBot - yTop);
+      }
+      bc.fillStyle = textColor;
+      bc.textBaseline = 'top';
+      bc.font = fs + 'px ' + ff;
+      for (i = 0; i < n; i++) bc.fillText(lines[i], padX, padY + i * lineHeight + topInset);
+
+      return { buf: buf, bufW: bufW, bufH: bufH };
+    }
+
+    function drawPosterBlock(c, spec) {
+      var pad = spec.rw * 0.05;
+      var pageW = Math.max(200, Math.round(spec.rw - pad * 2));
+      var pageMaxTextH = Math.max(140, Math.round(spec.rh * 0.78));
+      var pb = buildPosterBuffer(spec.phrase, spec.color, spec.font, pageW, pageMaxTextH);
+      var bufW = pb.bufW, bufH = pb.bufH, halfH = bufH / 2;
+      var theta = Math.max(1e-3, spec.bend * THETA_MAX);
+      var R = bufH / theta;
+      function warp(bx, by) { var phi = (by - halfH) / R, rad = R + bx; return { x: rad * Math.cos(phi) - R, y: rad * Math.sin(phi) }; }
+
+      var minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity, i, p, SAMP = 14;
+      for (i = 0; i <= SAMP; i++) {
+        var by = bufH * i / SAMP;
+        p = warp(0, by);    if (p.x<minX)minX=p.x; if(p.x>maxX)maxX=p.x; if(p.y<minY)minY=p.y; if(p.y>maxY)maxY=p.y;
+        p = warp(bufW, by); if (p.x<minX)minX=p.x; if(p.x>maxX)maxX=p.x; if(p.y<minY)minY=p.y; if(p.y>maxY)maxY=p.y;
+      }
+      for (i = 0; i <= SAMP; i++) {
+        var bx = bufW * i / SAMP;
+        p = warp(bx, 0);    if (p.x<minX)minX=p.x; if(p.x>maxX)maxX=p.x; if(p.y<minY)minY=p.y; if(p.y>maxY)maxY=p.y;
+        p = warp(bx, bufH); if (p.x<minX)minX=p.x; if(p.x>maxX)maxX=p.x; if(p.y<minY)minY=p.y; if(p.y>maxY)maxY=p.y;
+      }
+      var bboxW = maxX - minX, bboxH = maxY - minY;
+      var scale = Math.min(spec.rw / bboxW, spec.rh / bboxH);
+      if (!isFinite(scale) || scale <= 0) scale = 1;
+      var TX = spec.cx - scale * (minX + maxX) / 2;
+      var TY = spec.cy - scale * (minY + maxY) / 2;
+
+      var NV = Math.max(6, Math.min(48, Math.round(theta * 18) + 6));
+      var OVER = 0.8, bw = bufW, b;
+      for (b = 0; b < NV; b++) {
+        var ys = bufH * b / NV, ye = bufH * (b + 1) / NV, yeOv = Math.min(bufH, ye + OVER);
+        var D0 = warp(0, ys), D1 = warp(bw, ys), D2 = warp(0, yeOv), D3 = warp(bw, yeOv);
+        var a = (D1.x - D0.x) / bw, bb = (D1.y - D0.y) / bw;
+        var cc = (D2.x - D0.x) / (yeOv - ys), dd = (D2.y - D0.y) / (yeOv - ys);
+        var e = D0.x - cc * ys, f = D0.y - dd * ys;
+        var S0x = scale*D0.x+TX, S0y = scale*D0.y+TY, S1x = scale*D1.x+TX, S1y = scale*D1.y+TY;
+        var S3x = scale*D3.x+TX, S3y = scale*D3.y+TY, S2x = scale*D2.x+TX, S2y = scale*D2.y+TY;
+        c.save();
+        c.beginPath();
+        c.moveTo(S0x, S0y); c.lineTo(S1x, S1y); c.lineTo(S3x, S3y); c.lineTo(S2x, S2y);
+        c.closePath(); c.clip();
+        c.setTransform(scale*a, scale*bb, scale*cc, scale*dd, scale*e+TX, scale*f+TY);
+        c.drawImage(pb.buf, 0, 0);
+        c.restore();
+      }
+      c.setTransform(1, 0, 0, 1, 0, 0);
+    }
+
+    function exportA4() {
+      var DPI = 300;
+      var A4W = Math.round(210 / 25.4 * DPI);  // 2480 px (A4 verticale)
+      var A4H = Math.round(297 / 25.4 * DPI);  // 3508 px
+      var cv = document.createElement('canvas');
+      cv.width = A4W; cv.height = A4H;
+      var c = cv.getContext('2d');           // sfondo trasparente: niente fill
+
+      var N = 4 + Math.floor(Math.random() * 2); // 4 o 5 frasi
+      var cols = shuffle(COLORS.slice());
+      var fnts = shuffle(FONTS.slice());
+      var phrs = shuffle(PHRASES.slice());
+
+      // Posizionamento LIBERO in 2D: niente bande/colonne. I centri sono sparsi
+      // con "best candidate" (per non ammucchiarli tutti in un punto) ma possono
+      // cadere ovunque, anche sui bordi → blocchi grandi che si accavallano e
+      // vengono tagliati a vivo (metà dentro / metà fuori dall'immagine).
+      var centers = [];
+      for (var i = 0; i < N; i++) {
+        var rw = randRange(0.5, 0.85) * A4W;
+        var rh = randRange(0.32, 0.58) * A4H;
+
+        var best = null, bestD = -1;
+        for (var t = 0; t < 12; t++) {
+          var ccx = randRange(0, A4W), ccy = randRange(0, A4H);
+          var dmin = 1e18;
+          for (var j = 0; j < centers.length; j++) {
+            var dx = ccx - centers[j].x, dy = ccy - centers[j].y;
+            var dd = dx * dx + dy * dy;
+            if (dd < dmin) dmin = dd;
+          }
+          if (dmin > bestD) { bestD = dmin; best = { x: ccx, y: ccy }; }
+        }
+        centers.push(best);
+
+        var bend = Math.random() < 0.45 ? 0 : randRange(0.25, BEND_MAX); // miste: alcune piatte, altre aperte
+        drawPosterBlock(c, {
+          phrase: phrs[i % phrs.length],
+          color: cols[i % cols.length],
+          font: fnts[i % fnts.length],
+          rw: rw, rh: rh, cx: best.x, cy: best.y, bend: bend
+        });
+      }
+
+      cv.toBlob(function (blob) {
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = 'prova2-A4-' + new Date().toISOString().replace(/[:.]/g, '-') + '.png';
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+      }, 'image/png');
+    }
+
+    // ── Diagnostic blob visualizer ───────────────────────────────────────
+    // Colori per ID massa (ciclici)
+    var PERSON_COLORS = ['#00e5ff','#ff2d8f','#ffe600','#0bff6a','#ff6b35','#a78bfa','#ff5252','#26d9ff'];
+
+    var diagBox     = document.getElementById('hands-diag');
+    var diagCanvas  = document.getElementById('diagCanvas');
+    var diagCtx     = diagCanvas.getContext('2d');
+    var diagStats   = document.getElementById('diagStats');
+    var diagVisible = false;
+
+    // Canvas piccolo per upscalare la maschera diff (rossa) sul diag
+    var maskCanvas = document.createElement('canvas');
+    maskCanvas.width = PROC_W; maskCanvas.height = PROC_H;
+    var maskCtx = maskCanvas.getContext('2d');
+    var maskImgData = maskCtx.createImageData(PROC_W, PROC_H);
+
+    function setDiag(visible) {
+      diagVisible = !!visible;
+      diagBox.hidden = !diagVisible;
+    }
+
+    function colorForId(id) {
+      var n = parseInt(id, 10) || 0;
+      return PERSON_COLORS[(n - 1 + PERSON_COLORS.length) % PERSON_COLORS.length];
+    }
+
+    function drawDiagnostic(detections) {
+      if (!diagVisible) return;
+      if (!video || video.readyState < 2) return;
+
+      var dW = diagCanvas.width, dH = diagCanvas.height;
+
+      // 1) feed webcam (mirror coerente col processing)
+      diagCtx.save();
+      if (MIRROR_VIDEO) {
+        diagCtx.scale(-1, 1);
+        diagCtx.drawImage(video, -dW, 0, dW, dH);
+      } else {
+        diagCtx.drawImage(video, 0, 0, dW, dH);
+      }
+      diagCtx.restore();
+
+      // velo scuro per leggibilità
+      diagCtx.fillStyle = 'rgba(0,0,0,0.45)';
+      diagCtx.fillRect(0, 0, dW, dH);
+
+      // 2) maschera differenza in rosso (quello che il sistema "vede" muoversi)
+      var md = maskImgData.data;
+      for (var m = 0, p = 0; m < diffMask.length; m++, p += 4) {
+        if (diffMask[m] === 1) {
+          md[p] = 255; md[p + 1] = 40; md[p + 2] = 40; md[p + 3] = 110;
+        } else {
+          md[p + 3] = 0;
+        }
+      }
+      maskCtx.putImageData(maskImgData, 0, 0);
+      diagCtx.imageSmoothingEnabled = false;
+      diagCtx.drawImage(maskCanvas, 0, 0, dW, dH);
+
+      // 3) per ogni massa: cerchio di ingombro + centroide + ID
+      var sx = dW / W, sy = dH / H;
+      var sAvg = (sx + sy) / 2;
+      for (var i = 0; i < detections.length; i++) {
+        var d = detections[i];
+        var color = colorForId(d.id);
+        var ccx = d.x * sx, ccy = d.y * sy;
+        var rr  = d.r * sAvg;
+
+        // cerchio di ingombro
+        diagCtx.strokeStyle = color;
+        diagCtx.lineWidth = 1.6;
+        diagCtx.globalAlpha = 0.9;
+        diagCtx.beginPath();
+        diagCtx.arc(ccx, ccy, rr, 0, Math.PI * 2);
+        diagCtx.stroke();
+        diagCtx.fillStyle = color;
+        diagCtx.globalAlpha = 0.10;
+        diagCtx.beginPath();
+        diagCtx.arc(ccx, ccy, rr, 0, Math.PI * 2);
+        diagCtx.fill();
+        diagCtx.globalAlpha = 1;
+
+        // centroide
+        diagCtx.fillStyle = '#fff';
+        diagCtx.beginPath();
+        diagCtx.arc(ccx, ccy, 4, 0, Math.PI * 2);
+        diagCtx.fill();
+
+        // etichetta: ID + % di frame occupata
+        var text = 'P' + d.id + ' · ' + (d.score * 100).toFixed(1) + '%';
+        diagCtx.font = '11px "Helvetica Neue", Helvetica, Arial, sans-serif';
+        var tw = diagCtx.measureText(text).width;
+        var tx = Math.max(2, Math.min(dW - tw - 6, ccx - tw / 2));
+        var ty = Math.max(12, ccy - rr - 6);
+        diagCtx.fillStyle = color;
+        diagCtx.fillRect(tx - 2, ty - 10, tw + 6, 13);
+        diagCtx.fillStyle = '#000';
+        diagCtx.font = 'bold 11px "Helvetica Neue", Helvetica, Arial, sans-serif';
+        diagCtx.fillText(text, tx + 1, ty);
+      }
+
+      // 4) banner se lo sfondo non è ancora calibrato
+      if (!bgReady) {
+        diagCtx.fillStyle = 'rgba(0,0,0,0.7)';
+        diagCtx.fillRect(0, dH / 2 - 12, dW, 24);
+        diagCtx.fillStyle = '#ffe600';
+        diagCtx.font = 'bold 11px "Helvetica Neue", Helvetica, Arial, sans-serif';
+        diagCtx.textAlign = 'center';
+        diagCtx.fillText('SFONDO NON CALIBRATO — premi 🎯 Calibra', dW / 2, dH / 2 + 4);
+        diagCtx.textAlign = 'left';
+      }
+
+      diagStats.textContent = detections.length + ' masse · ' + detectFps + ' fps';
+    }
+
+    document.getElementById('btnDiag').addEventListener('click', function () { setDiag(!diagVisible); });
+
+    // Cycle through cameras — la scena cambia: ricalibra lo sfondo dopo 1s
+    document.getElementById('btnCam').addEventListener('click', async function () {
+      try {
+        await listVideoDevices();
+        await useCamera(currentCamIdx + 1);
+        setTimeout(function () { calibrateBackground(); }, 1000);
+      } catch (e) {
+        console.error('[btnCam]', e);
+      }
+    });
+
+    // Mirror toggle — cambia geometria del confronto: ricalibra lo sfondo
+    var btnMirror = document.getElementById('btnMirror');
+    btnMirror.classList.toggle('on', MIRROR_VIDEO);
+    btnMirror.addEventListener('click', function () {
+      MIRROR_VIDEO = !MIRROR_VIDEO;
+      btnMirror.classList.toggle('on', MIRROR_VIDEO);
+      calibrateBackground();
+    });
+
+    // Calibrazione sfondo manuale
+    document.getElementById('btnCalibrate').addEventListener('click', function () {
+      calibrateBackground();
+    });
+    document.getElementById('diagClose').addEventListener('click', function () { setDiag(false); });
+
+    document.getElementById('btnSaveAll').addEventListener('click', function () { exportSvgFor('all'); });
+    document.getElementById('btnClear').addEventListener('click', clearPath);
+    document.getElementById('btnReveal').addEventListener('click', revealAll);
+    document.getElementById('btnA4').addEventListener('click', exportA4);
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 's' || e.key === 'S') exportSvgFor('all');
+      if (e.key === 'c' || e.key === 'C') clearPath();
+      if (e.key === 'r' || e.key === 'R') revealAll();
+      if (e.key === 'a' || e.key === 'A') exportA4();
+      if (e.key === 'd' || e.key === 'D') setDiag(!diagVisible);
+      if (e.key === 'b' || e.key === 'B') calibrateBackground();
+    });
+
+    requestAnimationFrame(render);
+  })();
+  </script>
+</body>
+</html>
