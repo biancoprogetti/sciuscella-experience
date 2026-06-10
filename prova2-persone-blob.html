@@ -968,8 +968,8 @@
 
     // Configurazione
     var PROC_W = 160, PROC_H = 90;     // risoluzione di analisi (bassa = veloce + denoise)
-    var DIFF_THRESHOLD       = 28;     // differenza grigio 0-255 per dire "pixel cambiato"
-    var MIN_BLOB_FRAC        = 0.004;  // area minima blob (frazione del frame) — sotto = rumore
+    var DIFF_THRESHOLD       = 32;     // differenza grigio 0-255 per dire "pixel cambiato"
+    var MIN_BLOB_FRAC        = 0.008;  // area minima blob (frazione del frame) — sotto = rumore
     var MAX_BLOB_FRAC        = 0.45;   // sopra = probabile cambio di luce, ignora
     var MAX_BLOBS            = 8;      // massimo masse tracciate per frame
     var BG_ADAPT             = 0.015;  // adattamento lento dello sfondo nelle zone statiche
@@ -983,7 +983,9 @@
 
     var bgGray   = new Float32Array(PROC_W * PROC_H);  // sfondo di riferimento
     var curGray  = new Float32Array(PROC_W * PROC_H);  // frame corrente
-    var diffMask = new Uint8Array(PROC_W * PROC_H);    // 1 = pixel diverso dallo sfondo
+    var rawMask  = new Uint8Array(PROC_W * PROC_H);    // maschera grezza (pre-morfologia)
+    var tmpMask  = new Uint8Array(PROC_W * PROC_H);    // buffer morfologia
+    var diffMask = new Uint8Array(PROC_W * PROC_H);    // maschera finale (post-morfologia)
     var blobLbl  = new Int32Array(PROC_W * PROC_H);    // etichette connected components
     var bgReady  = false;
     var detecting = false;
@@ -992,6 +994,7 @@
     var lastDetections = [];
     var detectFps = 0;
     var detectFpsAccum = 0, detectFpsCount = 0, detectFpsLast = 0;
+    var smoothedR = {};   // raggio lisciato per label (EMA)
 
     // ── Calibrazione sfondo: cattura il frame corrente come riferimento ───
     function calibrateBackground() {
@@ -1118,17 +1121,58 @@
 
       grabGray(curGray);
 
-      // 1) maschera differenza + adattamento lento dello sfondo dove statico
       var n = PROC_W * PROC_H;
+
+      // 1a) Compensazione esposizione: le webcam regolano continuamente
+      // l'esposizione globale → senza compensazione, quando entri in scena
+      // TUTTO il frame risulta "diverso". Confrontiamo i valori centrati
+      // sulla media: i cambi di luminosità globale si annullano.
+      var sumCur = 0, sumBg = 0;
+      for (var i0 = 0; i0 < n; i0++) { sumCur += curGray[i0]; sumBg += bgGray[i0]; }
+      var expOffset = (sumCur - sumBg) / n;   // di quanto è "slittata" l'esposizione
+
+      // 1b) maschera grezza + adattamento lento dello sfondo dove statico
       for (var i = 0; i < n; i++) {
-        var d = curGray[i] - bgGray[i];
+        var d = (curGray[i] - expOffset) - bgGray[i];
         if (d < 0) d = -d;
         if (d > DIFF_THRESHOLD) {
-          diffMask[i] = 1;
+          rawMask[i] = 1;
         } else {
-          diffMask[i] = 0;
-          // il pixel è fermo → lo sfondo si aggiorna piano (compensa derive luce)
-          bgGray[i] += (curGray[i] - bgGray[i]) * BG_ADAPT;
+          rawMask[i] = 0;
+          bgGray[i] += ((curGray[i] - expOffset) - bgGray[i]) * BG_ADAPT;
+        }
+      }
+
+      // 1c) EROSIONE: un pixel sopravvive solo se ha almeno 5 vicini attivi
+      // (8-connettività) → elimina il rumore "sale e pepe" del sensore
+      tmpMask.fill(0);
+      for (var ey = 1; ey < PROC_H - 1; ey++) {
+        for (var ex = 1; ex < PROC_W - 1; ex++) {
+          var ei = ey * PROC_W + ex;
+          if (rawMask[ei] !== 1) continue;
+          var cnt = rawMask[ei - 1] + rawMask[ei + 1] +
+                    rawMask[ei - PROC_W] + rawMask[ei + PROC_W] +
+                    rawMask[ei - PROC_W - 1] + rawMask[ei - PROC_W + 1] +
+                    rawMask[ei + PROC_W - 1] + rawMask[ei + PROC_W + 1];
+          if (cnt >= 5) tmpMask[ei] = 1;
+        }
+      }
+
+      // 1d) DILATAZIONE ×2: espande e riunisce le parti della sagoma che il
+      // diff ha spezzato (vestiti dello stesso colore dello sfondo, ecc.)
+      // → una persona diventa UN blob, non dieci
+      diffMask.set(tmpMask);
+      for (var pass = 0; pass < 2; pass++) {
+        rawMask.set(diffMask); // riuso rawMask come sorgente della passata
+        for (var dy = 1; dy < PROC_H - 1; dy++) {
+          for (var dx2 = 1; dx2 < PROC_W - 1; dx2++) {
+            var di = dy * PROC_W + dx2;
+            if (rawMask[di] !== 1) continue;
+            diffMask[di - 1] = 1; diffMask[di + 1] = 1;
+            diffMask[di - PROC_W] = 1; diffMask[di + PROC_W] = 1;
+            diffMask[di - PROC_W - 1] = 1; diffMask[di - PROC_W + 1] = 1;
+            diffMask[di + PROC_W - 1] = 1; diffMask[di + PROC_W + 1] = 1;
+          }
         }
       }
 
@@ -1221,11 +1265,22 @@
           // ID stabili per massa
           var ids = assignPersonIds(detections);
 
-          // Erase per ogni massa, col suo raggio di ingombro
+          // Erase per ogni massa, col suo raggio di ingombro.
+          // Posizione e raggio vengono lisciati (EMA) per evitare jitter.
           var seen = {};
           for (var i = 0; i < detections.length; i++) {
             var label = 'P' + ids[i];
             seen[label] = true;
+
+            var prevPos = lastErasePos[label];
+            if (prevPos) {
+              detections[i].x = prevPos.x + (detections[i].x - prevPos.x) * 0.45;
+              detections[i].y = prevPos.y + (detections[i].y - prevPos.y) * 0.45;
+            }
+            var prevR = smoothedR[label];
+            if (prevR) detections[i].r = prevR + (detections[i].r - prevR) * 0.25;
+            smoothedR[label] = detections[i].r;
+
             erasePerson(detections[i].x, detections[i].y, label, detections[i].r);
             detections[i].id = ids[i];
           }
@@ -1237,6 +1292,7 @@
               delete lastErasePos[key];
               currentStroke[key] = null;
               delete currentStroke[key];
+              delete smoothedR[key];
             }
           }
 
