@@ -1045,10 +1045,29 @@
         for (var t = 0; t < tracks.length; t++) tracks[t].stop();
       }
 
-      var stream = await navigator.mediaDevices.getUserMedia({
-        video: { deviceId: { exact: device.deviceId }, width: 1280, height: 720 },
-        audio: false
-      });
+      // Cascata di tentativi: dal vincolo più stretto al più permissivo.
+      // OverconstrainedError = il vincolo non è soddisfacibile → si scala.
+      var attempts = [];
+      if (device.deviceId) {
+        attempts.push({ video: { deviceId: { exact: device.deviceId },
+                                 width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
+        attempts.push({ video: { deviceId: device.deviceId }, audio: false });
+      }
+      attempts.push({ video: { width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
+      attempts.push({ video: true, audio: false });
+
+      var stream = null, lastErr = null;
+      for (var a = 0; a < attempts.length; a++) {
+        try {
+          stream = await navigator.mediaDevices.getUserMedia(attempts[a]);
+          break;
+        } catch (e) {
+          lastErr = e;
+          console.warn('[useCamera] tentativo ' + (a + 1) + ' fallito:', e.name);
+        }
+      }
+      if (!stream) throw lastErr || new Error('Nessuno stream disponibile');
+
       video.srcObject = stream;
       await new Promise(function (resolve) { video.onloadedmetadata = resolve; });
       await video.play();
@@ -1062,17 +1081,30 @@
 
     async function initCamera() {
       try {
-        // Probe per ottenere permessi (label rimangono vuoti senza permesso)
+        // Probe per ottenere permessi (label/deviceId vuoti senza permesso)
         var probe = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
         probe.getTracks().forEach(function (t) { t.stop(); });
 
+        // IMPORTANTE: enumerare DOPO il permesso, così i deviceId sono reali
         await listVideoDevices();
         if (videoDevices.length === 0) throw new Error('Nessuna webcam trovata');
-        await useCamera(0);
+
+        // Prova le camere in ordine finché una non parte
+        var ok = false, lastErr = null;
+        for (var i = 0; i < videoDevices.length && !ok; i++) {
+          try {
+            await useCamera(i);
+            ok = true;
+          } catch (e) {
+            lastErr = e;
+            console.warn('[initCamera] camera ' + i + ' fallita:', e.name || e);
+          }
+        }
+        if (!ok) throw lastErr || new Error('Nessuna camera utilizzabile');
         loadingMsg.textContent = 'Pronto';
       } catch (e) {
         console.error('[camera init]', e);
-        loadingMsg.textContent = 'Errore webcam: ' + (e.message || e);
+        loadingMsg.textContent = 'Errore webcam: ' + (e.name || '') + ' ' + (e.message || e);
       }
     }
 
