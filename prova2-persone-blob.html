@@ -972,6 +972,7 @@
     var MIN_BLOB_FRAC        = 0.008;  // area minima blob (frazione del frame) — sotto = rumore
     var MAX_BLOB_FRAC        = 0.45;   // sopra = probabile cambio di luce, ignora
     var MAX_BLOBS            = 8;      // massimo masse tracciate per frame
+    var MERGE_GAP_PX         = 14;     // gap max (px proc) tra blob per considerarli UN corpo
     var BG_ADAPT             = 0.015;  // adattamento lento dello sfondo nelle zone statiche
     var DETECTION_TARGET_FPS = 30;
     var MIRROR_VIDEO         = true;   // selfie mode (spegni per camera dall'alto)
@@ -1180,8 +1181,9 @@
       blobLbl.fill(0);
       var blobs = [];
       var nextLbl = 0;
-      var minArea = Math.max(4, Math.round(n * MIN_BLOB_FRAC));
-      var maxArea = Math.round(n * MAX_BLOB_FRAC);
+      var minArea    = Math.max(4, Math.round(n * MIN_BLOB_FRAC));
+      var maxArea    = Math.round(n * MAX_BLOB_FRAC);
+      var noiseFloor = Math.max(3, Math.round(n * 0.0015)); // sotto = rumore puro
 
       for (var start = 0; start < n; start++) {
         if (diffMask[start] !== 1 || blobLbl[start] !== 0) continue;
@@ -1212,7 +1214,9 @@
           if (py < PROC_H - 1 && diffMask[idx + PROC_W] === 1 && blobLbl[idx + PROC_W] === 0) { blobLbl[idx + PROC_W] = nextLbl; ffStack[sp++] = idx + PROC_W; }
         }
 
-        if (area < minArea || area > maxArea) continue;
+        // Floor di rumore basso: i frammenti piccoli NON vengono buttati qui,
+        // perché potrebbero essere pezzi di un corpo da riunire nel merge.
+        if (area < noiseFloor || area > maxArea) continue;
         blobs.push({
           area: area,
           cx: sumX / area, cy: sumY / area,
@@ -1220,11 +1224,43 @@
         });
       }
 
-      // 3) i blob più grandi prima, max MAX_BLOBS
+      // 3) FUSIONE: blob con bounding box vicini = stesso corpo.
+      // Itera finché non ci sono più fusioni possibili (agglomerativo).
+      var merged = true;
+      while (merged && blobs.length > 1) {
+        merged = false;
+        outer:
+        for (var a1 = 0; a1 < blobs.length; a1++) {
+          for (var b1 = a1 + 1; b1 < blobs.length; b1++) {
+            var A = blobs[a1], B = blobs[b1];
+            var gapX = Math.max(0, Math.max(A.minX - B.maxX, B.minX - A.maxX));
+            var gapY = Math.max(0, Math.max(A.minY - B.maxY, B.minY - A.maxY));
+            if (gapX <= MERGE_GAP_PX && gapY <= MERGE_GAP_PX) {
+              // fonde B dentro A (centroide pesato sull'area)
+              var tot = A.area + B.area;
+              A.cx = (A.cx * A.area + B.cx * B.area) / tot;
+              A.cy = (A.cy * A.area + B.cy * B.area) / tot;
+              A.area = tot;
+              A.minX = Math.min(A.minX, B.minX);
+              A.maxX = Math.max(A.maxX, B.maxX);
+              A.minY = Math.min(A.minY, B.minY);
+              A.maxY = Math.max(A.maxY, B.maxY);
+              blobs.splice(b1, 1);
+              merged = true;
+              break outer;
+            }
+          }
+        }
+      }
+
+      // 4) SOLO ORA il filtro area minima: i corpi fusi piccoli = rumore
+      blobs = blobs.filter(function (bl) { return bl.area >= minArea; });
+
+      // 5) i blob più grandi prima, max MAX_BLOBS
       blobs.sort(function (a, b) { return b.area - a.area; });
       if (blobs.length > MAX_BLOBS) blobs.length = MAX_BLOBS;
 
-      // 4) mappa in coordinate canvas + raggio di ingombro
+      // 6) mappa in coordinate canvas + raggio di ingombro
       var sx = W / PROC_W, sy = H / PROC_H;
       var sAvg = (sx + sy) / 2;
       var out = [];
