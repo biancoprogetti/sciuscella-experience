@@ -826,25 +826,35 @@
     var currentStroke = {};       // { 'P1': <stroke obj>, ... }
     var MIN_PATH_DIST = 4;        // px minimi tra punti consecutivi registrati
 
-    // ── Tracker per persone (ID numerici persistenti) ────────────────────────
-    var trackedPersons = {};      // { id (string): { x, y, w, h, score, lastFrame } }
+    // ── Tracker a due stadi: tracce "tentative" + ID confermati ──────────────
+    // ANTI-INFLAZIONE ID: una massa nuova NON riceve subito un ID. Diventa
+    // una traccia "tentative" e deve persistere per BIRTH_FRAMES frame prima
+    // di essere battezzata (P1, P2...). Il rumore vive 1-2 frame → non viene
+    // mai battezzato. I track confermati invece sopravvivono ai flicker della
+    // detection per TRACK_DEATH_FRAMES prima di morire.
+    var trackedPersons  = {};     // confermati: { id: { x, y, ..., lastFrame } }
+    var tentativeTracks = [];     // candidati: [{ x, y, hits, lastFrame }]
     var nextPersonId = 1;
     var trackFrameN = 0;
-    var TRACK_DEATH_FRAMES = 15;  // ~0.5s a 30fps: tolleranza occlusioni brevi
+    var TRACK_DEATH_FRAMES = 90;  // ~3s: il flicker non uccide un ID confermato
+    var BIRTH_FRAMES       = 6;   // ~0.2s di persistenza per guadagnarsi un ID
+    var TENT_DROP_FRAMES   = 10;  // un candidato non visto per 10 frame decade
+
     function trackMatchDistSq() {
       var d = Math.min(W, H) * 0.3;
       return d * d;
     }
 
-    // detections: [{ x, y, w, h, score, x1, y1, x2, y2 }]  in canvas px
-    // Restituisce: array di ID stringhe ('1', '2', ...) assegnate ad ogni detection
+    // detections: [{ x, y, r, score, x1, y1, x2, y2 }] in canvas px.
+    // Ritorna un array parallelo: ID stringa ('1','2',...) per le masse
+    // confermate, null per quelle ancora in prova (da NON usare per erase).
     function assignPersonIds(detections) {
       trackFrameN++;
       var ids = new Array(detections.length).fill(null);
       var usedIds = {};
       var maxDistSq = trackMatchDistSq();
 
-      // 1) match greedy per distanza minima
+      // 1) match greedy detection ↔ track CONFERMATI
       var pairs = [];
       for (var i = 0; i < detections.length; i++) {
         for (var key in trackedPersons) {
@@ -863,21 +873,68 @@
         usedIds[p.id] = true;
       }
 
-      // 2) detection non matchate → nuovo ID incrementale
+      // 2) detection orfane ↔ tracce TENTATIVE (stesso matching greedy)
+      var tpairs = [];
       for (var i2 = 0; i2 < detections.length; i2++) {
         if (ids[i2] !== null) continue;
-        ids[i2] = String(nextPersonId++);
+        for (var ti = 0; ti < tentativeTracks.length; ti++) {
+          var tt = tentativeTracks[ti];
+          var dx2 = detections[i2].x - tt.x, dy2 = detections[i2].y - tt.y;
+          tpairs.push({ dist: dx2 * dx2 + dy2 * dy2, det: i2, tent: ti });
+        }
+      }
+      tpairs.sort(function (a, b) { return a.dist - b.dist; });
+      var detToTent = {};
+      var tentUsed = {};
+      for (var tk = 0; tk < tpairs.length; tk++) {
+        var tp = tpairs[tk];
+        if (detToTent[tp.det] !== undefined) continue;
+        if (tentUsed[tp.tent]) continue;
+        if (tp.dist > maxDistSq) continue;
+        detToTent[tp.det] = tp.tent;
+        tentUsed[tp.tent] = true;
       }
 
-      // 3) aggiorna trackedPersons + mantieni i recenti non visti
-      var next = {};
+      // aggiorna le tentative matchate; promuovi quelle che hanno "maturato"
+      for (var dKey in detToTent) {
+        var d = +dKey;
+        var tt2 = tentativeTracks[detToTent[dKey]];
+        tt2.x = detections[d].x;
+        tt2.y = detections[d].y;
+        tt2.hits++;
+        tt2.lastFrame = trackFrameN;
+        if (tt2.hits >= BIRTH_FRAMES) {
+          var newId = String(nextPersonId++);
+          ids[d] = newId;
+          usedIds[newId] = true;
+          tt2._promoted = true;
+        }
+      }
+
+      // 3) detection ancora orfane → nuova traccia tentative (nessun ID)
       for (var i3 = 0; i3 < detections.length; i3++) {
-        next[ids[i3]] = {
+        if (ids[i3] !== null || detToTent[i3] !== undefined) continue;
+        tentativeTracks.push({
           x: detections[i3].x, y: detections[i3].y,
-          w: detections[i3].w, h: detections[i3].h,
-          score: detections[i3].score,
-          x1: detections[i3].x1, y1: detections[i3].y1,
-          x2: detections[i3].x2, y2: detections[i3].y2,
+          hits: 1, lastFrame: trackFrameN
+        });
+      }
+
+      // pulizia tentative: promosse o decadute
+      tentativeTracks = tentativeTracks.filter(function (tt) {
+        return !tt._promoted && (trackFrameN - tt.lastFrame) < TENT_DROP_FRAMES;
+      });
+
+      // 4) aggiorna i confermati + tieni vivi i non visti di recente
+      var next = {};
+      for (var i4 = 0; i4 < detections.length; i4++) {
+        if (ids[i4] === null) continue;
+        next[ids[i4]] = {
+          x: detections[i4].x, y: detections[i4].y,
+          r: detections[i4].r,
+          score: detections[i4].score,
+          x1: detections[i4].x1, y1: detections[i4].y1,
+          x2: detections[i4].x2, y2: detections[i4].y2,
           lastFrame: trackFrameN
         };
       }
@@ -1341,10 +1398,14 @@
           // ID stabili per massa
           var ids = assignPersonIds(detections);
 
-          // Erase per ogni massa, col suo raggio di ingombro.
+          // Erase per ogni massa CONFERMATA (id null = ancora in prova:
+          // non cancella, non lascia scia — solo visibile nel diag in grigio).
           // Posizione e raggio vengono lisciati (EMA) per evitare jitter.
           var seen = {};
           for (var i = 0; i < detections.length; i++) {
+            detections[i].id = ids[i];
+            if (ids[i] === null) continue;
+
             var label = 'P' + ids[i];
             seen[label] = true;
 
@@ -1358,17 +1419,22 @@
             smoothedR[label] = detections[i].r;
 
             erasePerson(detections[i].x, detections[i].y, label, detections[i].r);
-            detections[i].id = ids[i];
           }
 
-          // Masse sparite questo frame → chiude la loro stroke
+          // Chiude la stroke SOLO quando il track è davvero morto
+          // (non per un flicker di un frame: il track confermato resta vivo
+          // in trackedPersons per TRACK_DEATH_FRAMES, e la scia riprende
+          // da dove era senza spezzarsi)
           for (var key in lastErasePos) {
             if (!seen[key] && lastErasePos[key]) {
-              lastErasePos[key] = null;
-              delete lastErasePos[key];
-              currentStroke[key] = null;
-              delete currentStroke[key];
-              delete smoothedR[key];
+              var pid = key.slice(1); // 'P12' → '12'
+              if (!trackedPersons[pid]) {
+                lastErasePos[key] = null;
+                delete lastErasePos[key];
+                currentStroke[key] = null;
+                delete currentStroke[key];
+                delete smoothedR[key];
+              }
             }
           }
 
@@ -1700,13 +1766,26 @@
       diagCtx.drawImage(maskCanvas, 0, 0, dW, dH);
 
       // 3) per ogni massa: cerchio di ingombro + centroide + ID
+      // (id null = candidata non confermata → grigio tratteggiato, niente label)
       var sx = dW / W, sy = dH / H;
       var sAvg = (sx + sy) / 2;
       for (var i = 0; i < detections.length; i++) {
         var d = detections[i];
-        var color = colorForId(d.id);
         var ccx = d.x * sx, ccy = d.y * sy;
         var rr  = d.r * sAvg;
+
+        if (d.id == null) {
+          diagCtx.strokeStyle = 'rgba(255,255,255,0.35)';
+          diagCtx.lineWidth = 1;
+          diagCtx.setLineDash([4, 4]);
+          diagCtx.beginPath();
+          diagCtx.arc(ccx, ccy, rr, 0, Math.PI * 2);
+          diagCtx.stroke();
+          diagCtx.setLineDash([]);
+          continue;
+        }
+
+        var color = colorForId(d.id);
 
         // cerchio di ingombro
         diagCtx.strokeStyle = color;
