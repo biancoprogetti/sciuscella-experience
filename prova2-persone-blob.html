@@ -101,6 +101,40 @@
     }
     .diag-legend .dot-w { background: #fff; box-shadow: 0 0 0 1.5px rgba(255,255,255,0.4); }
     .diag-legend .dot-c { background: #00e5ff; }
+
+    .diag-slider {
+      display: flex; align-items: center; gap: 10px;
+      padding: 10px 4px 2px;
+    }
+    .diag-slider label {
+      font-size: 9px; font-weight: 600;
+      letter-spacing: 0.18em; text-transform: uppercase;
+      color: rgba(255,255,255,0.6);
+    }
+    .diag-slider input[type=range] {
+      flex: 1;
+      -webkit-appearance: none;
+      height: 14px; background: transparent; cursor: ew-resize;
+    }
+    .diag-slider input[type=range]::-webkit-slider-runnable-track {
+      height: 2px; background: rgba(255,255,255,0.25); border-radius: 1px;
+    }
+    .diag-slider input[type=range]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 13px; height: 13px; border-radius: 50%;
+      background: #fff; margin-top: -5.5px; cursor: ew-resize;
+    }
+    .diag-slider input[type=range]::-moz-range-track {
+      height: 2px; background: rgba(255,255,255,0.25);
+    }
+    .diag-slider input[type=range]::-moz-range-thumb {
+      width: 13px; height: 13px; border-radius: 50%;
+      background: #fff; border: none; cursor: ew-resize;
+    }
+    .diag-slider span {
+      font-size: 10px; font-variant-numeric: tabular-nums;
+      color: rgba(255,255,255,0.85); min-width: 20px; text-align: right;
+    }
   </style>
 </head>
 <body>
@@ -129,9 +163,15 @@
       <button class="diag-close" id="diagClose" title="Chiudi">×</button>
     </div>
     <canvas id="diagCanvas" width="320" height="240"></canvas>
+    <div class="diag-slider">
+      <label for="sensSlider">Soglia</label>
+      <input type="range" id="sensSlider" min="15" max="90" step="1" value="42">
+      <span id="sensValue">42</span>
+    </div>
     <div class="diag-legend">
       <span class="dot dot-w"></span> centroide + cerchio di ingombro (cancella il velo)<br>
-      <span class="dot dot-c"></span> area rossa = differenza dallo sfondo calibrato
+      <span class="dot dot-c"></span> area rossa = differenza dallo sfondo calibrato<br>
+      soglia alta = meno sensibile (meno rosso)
     </div>
   </div>
 
@@ -968,7 +1008,7 @@
 
     // Configurazione
     var PROC_W = 160, PROC_H = 90;     // risoluzione di analisi (bassa = veloce + denoise)
-    var DIFF_THRESHOLD       = 32;     // differenza grigio 0-255 per dire "pixel cambiato"
+    var DIFF_THRESHOLD       = 42;     // differenza grigio 0-255 (regolabile da slider nel diag)
     var MIN_BLOB_FRAC        = 0.008;  // area minima blob (frazione del frame) — sotto = rumore
     var MAX_BLOB_FRAC        = 0.45;   // sopra = probabile cambio di luce, ignora
     var MAX_BLOBS            = 8;      // massimo masse tracciate per frame
@@ -1740,6 +1780,16 @@
     // Calibrazione sfondo manuale
     document.getElementById('btnCalibrate').addEventListener('click', function () {
       calibrateBackground();
+    });
+
+    // Slider sensibilità (soglia di differenza)
+    var sensSlider = document.getElementById('sensSlider');
+    var sensValue  = document.getElementById('sensValue');
+    sensSlider.value = DIFF_THRESHOLD;
+    sensValue.textContent = DIFF_THRESHOLD;
+    sensSlider.addEventListener('input', function () {
+      DIFF_THRESHOLD = +sensSlider.value;
+      sensValue.textContent = DIFF_THRESHOLD;
     });
     document.getElementById('diagClose').addEventListener('click', function () { setDiag(false); });
 
