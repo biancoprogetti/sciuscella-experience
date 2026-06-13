@@ -832,13 +832,23 @@
     // di essere battezzata (P1, P2...). Il rumore vive 1-2 frame → non viene
     // mai battezzato. I track confermati invece sopravvivono ai flicker della
     // detection per TRACK_DEATH_FRAMES prima di morire.
-    var trackedPersons  = {};     // confermati: { id: { x, y, ..., lastFrame } }
+    var trackedPersons  = {};     // confermati: { id: { x, y, vx, vy, ..., lastFrame, missed } }
     var tentativeTracks = [];     // candidati: [{ x, y, hits, lastFrame }]
     var nextPersonId = 1;
     var trackFrameN = 0;
     var TRACK_DEATH_FRAMES = 90;  // ~3s: il flicker non uccide un ID confermato
     var BIRTH_FRAMES       = 6;   // ~0.2s di persistenza per guadagnarsi un ID
     var TENT_DROP_FRAMES   = 10;  // un candidato non visto per 10 frame decade
+
+    // ── Predizione di movimento ──────────────────────────────────────────
+    // Ogni traccia ricorda la sua velocità (vx, vy). Il matching avviene
+    // sulla POSIZIONE PREVISTA (x + vx). Quando due persone si fondono in un
+    // unico blob, quella non matchata continua a muoversi per inerzia
+    // (dead reckoning): quando i corpi si separano di nuovo, gli ID tornano
+    // ciascuno al proprio posto previsto → niente scambio di identità.
+    var VEL_SMOOTH    = 0.35;     // EMA sulla velocità (alto = reattivo)
+    var DEADRECK_DAMP = 0.85;     // smorzamento della velocità durante l'occlusione
+    var MAX_MISSED_PREDICT = 30;  // frame max di dead reckoning prima di fermarsi
 
     function trackMatchDistSq() {
       var d = Math.min(W, H) * 0.3;
@@ -854,16 +864,18 @@
       var usedIds = {};
       var maxDistSq = trackMatchDistSq();
 
-      // 1) match greedy detection ↔ track CONFERMATI
+      // 1) match greedy detection ↔ track CONFERMATI, sulla posizione PREVISTA
       var pairs = [];
       for (var i = 0; i < detections.length; i++) {
         for (var key in trackedPersons) {
           var t = trackedPersons[key];
-          var dx = detections[i].x - t.x, dy = detections[i].y - t.y;
+          var predX = t.x + t.vx, predY = t.y + t.vy;
+          var dx = detections[i].x - predX, dy = detections[i].y - predY;
           pairs.push({ dist: dx * dx + dy * dy, det: i, id: key });
         }
       }
       pairs.sort(function (a, b) { return a.dist - b.dist; });
+      var matchedDet = {};   // id → indice detection
       for (var k = 0; k < pairs.length; k++) {
         var p = pairs[k];
         if (ids[p.det] !== null) continue;
@@ -871,6 +883,7 @@
         if (p.dist > maxDistSq) continue;
         ids[p.det] = p.id;
         usedIds[p.id] = true;
+        matchedDet[p.id] = p.det;
       }
 
       // 2) detection orfane ↔ tracce TENTATIVE (stesso matching greedy)
@@ -907,6 +920,7 @@
           var newId = String(nextPersonId++);
           ids[d] = newId;
           usedIds[newId] = true;
+          matchedDet[newId] = d;
           tt2._promoted = true;
         }
       }
@@ -925,24 +939,42 @@
         return !tt._promoted && (trackFrameN - tt.lastFrame) < TENT_DROP_FRAMES;
       });
 
-      // 4) aggiorna i confermati + tieni vivi i non visti di recente
+      // 4) aggiorna i confermati: matchati → posizione+velocità reali;
+      //    non matchati → dead reckoning (continuano per inerzia)
       var next = {};
-      for (var i4 = 0; i4 < detections.length; i4++) {
-        if (ids[i4] === null) continue;
-        next[ids[i4]] = {
-          x: detections[i4].x, y: detections[i4].y,
-          r: detections[i4].r,
-          score: detections[i4].score,
-          x1: detections[i4].x1, y1: detections[i4].y1,
-          x2: detections[i4].x2, y2: detections[i4].y2,
-          lastFrame: trackFrameN
+      // 4a) tracce confermate matchate da una detection
+      for (var idKey in matchedDet) {
+        var di = matchedDet[idKey];
+        var prev = trackedPersons[idKey];
+        var nvx = detections[di].x - (prev ? prev.x : detections[di].x);
+        var nvy = detections[di].y - (prev ? prev.y : detections[di].y);
+        var svx = prev ? prev.vx + (nvx - prev.vx) * VEL_SMOOTH : 0;
+        var svy = prev ? prev.vy + (nvy - prev.vy) * VEL_SMOOTH : 0;
+        next[idKey] = {
+          x: detections[di].x, y: detections[di].y,
+          vx: svx, vy: svy,
+          r: detections[di].r, score: detections[di].score,
+          x1: detections[di].x1, y1: detections[di].y1,
+          x2: detections[di].x2, y2: detections[di].y2,
+          lastFrame: trackFrameN, missed: 0
         };
       }
+      // 4b) tracce confermate NON matchate → tengono inerzia (occlusione/merge)
       for (var key2 in trackedPersons) {
-        if (!next[key2] &&
-            trackFrameN - trackedPersons[key2].lastFrame < TRACK_DEATH_FRAMES) {
-          next[key2] = trackedPersons[key2];
-        }
+        if (next[key2]) continue;
+        var old = trackedPersons[key2];
+        if (trackFrameN - old.lastFrame >= TRACK_DEATH_FRAMES) continue; // morta
+        var missed = (old.missed || 0) + 1;
+        var advance = missed <= MAX_MISSED_PREDICT;
+        next[key2] = {
+          x: advance ? old.x + old.vx : old.x,
+          y: advance ? old.y + old.vy : old.y,
+          vx: old.vx * DEADRECK_DAMP,
+          vy: old.vy * DEADRECK_DAMP,
+          r: old.r, score: old.score,
+          x1: old.x1, y1: old.y1, x2: old.x2, y2: old.y2,
+          lastFrame: old.lastFrame, missed: missed
+        };
       }
       trackedPersons = next;
 
@@ -1821,6 +1853,29 @@
       }
 
       // 4) banner se lo sfondo non è ancora calibrato
+      // 3b) tracce in PREDIZIONE (occluse/fuse): cerchio a puntini col loro ID
+      // alla posizione prevista → si vede l'identità "sopravvivere" all'incrocio
+      var occluded = 0;
+      for (var pk in trackedPersons) {
+        var tp = trackedPersons[pk];
+        if (!tp.missed || tp.missed < 1) continue;   // solo le non viste questo frame
+        occluded++;
+        var color2 = colorForId(pk);
+        var ox = tp.x * sx, oy = tp.y * sy, orr = (tp.r || 60) * sAvg;
+        diagCtx.strokeStyle = color2;
+        diagCtx.globalAlpha = 0.6;
+        diagCtx.lineWidth = 1.4;
+        diagCtx.setLineDash([3, 3]);
+        diagCtx.beginPath();
+        diagCtx.arc(ox, oy, orr, 0, Math.PI * 2);
+        diagCtx.stroke();
+        diagCtx.setLineDash([]);
+        diagCtx.globalAlpha = 1;
+        diagCtx.fillStyle = color2;
+        diagCtx.font = 'bold 10px "Helvetica Neue", Helvetica, Arial, sans-serif';
+        diagCtx.fillText('P' + pk + ' ?', ox - 10, oy - orr - 4);
+      }
+
       if (!bgReady) {
         diagCtx.fillStyle = 'rgba(0,0,0,0.7)';
         diagCtx.fillRect(0, dH / 2 - 12, dW, 24);
@@ -1831,7 +1886,8 @@
         diagCtx.textAlign = 'left';
       }
 
-      diagStats.textContent = detections.length + ' masse · ' + detectFps + ' fps';
+      diagStats.textContent = detections.length + ' masse · ' +
+        (occluded > 0 ? occluded + ' occluse · ' : '') + detectFps + ' fps';
     }
 
     document.getElementById('btnDiag').addEventListener('click', function () { setDiag(!diagVisible); });
