@@ -51,7 +51,9 @@
     #hands-diag {
       position: fixed;
       top: 18px; right: 18px;
-      width: 320px;
+      width: 520px;             /* più grande di default */
+      min-width: 300px;
+      max-width: 95vw;
       background: rgba(10,10,12,0.78);
       backdrop-filter: blur(24px) saturate(160%);
       -webkit-backdrop-filter: blur(24px) saturate(160%);
@@ -62,7 +64,11 @@
       color: rgba(255,255,255,0.92);
       font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
       box-shadow: 0 18px 40px rgba(0,0,0,0.5);
+      resize: horizontal;       /* trascina l'angolo in basso a destra */
+      overflow: auto;
     }
+    /* maniglia di resize più visibile */
+    #hands-diag::-webkit-resizer { background: rgba(255,255,255,0.25); }
     .diag-header {
       display: flex; align-items: center; justify-content: space-between;
       padding: 0 4px 8px;
@@ -172,7 +178,7 @@
       <span class="diag-stats" id="diagStats">— masse · — fps</span>
       <button class="diag-close" id="diagClose" title="Chiudi">×</button>
     </div>
-    <canvas id="diagCanvas" width="320" height="240"></canvas>
+    <canvas id="diagCanvas" width="480" height="270"></canvas>
     <div class="diag-slider">
       <label for="sensSlider">Soglia</label>
       <input type="range" id="sensSlider" min="15" max="90" step="1" value="42">
