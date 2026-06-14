@@ -269,6 +269,22 @@
       };
     }
     function rebuildHom() { homH = computeHomography(calibPts, CALIB_DST); }
+
+    // Punto (coord camera normalizzate) dentro il quad di calibrazione?
+    // Quad convesso ordinato (TL,TR,BR,BL) → segno coerente dei prodotti vettoriali.
+    function pointInQuad(px, py, quad) {
+      var sign = 0;
+      for (var i = 0; i < 4; i++) {
+        var a = quad[i], b = quad[(i + 1) % 4];
+        var cross = (b.x - a.x) * (py - a.y) - (b.y - a.y) * (px - a.x);
+        if (cross !== 0) {
+          var s = cross > 0 ? 1 : -1;
+          if (sign === 0) sign = s;
+          else if (s !== sign) return false;
+        }
+      }
+      return true;
+    }
     function saveCalib() {
       try { localStorage.setItem('sciuscella_calib', JSON.stringify(calibPts)); } catch (e) {}
     }
@@ -1521,6 +1537,12 @@
         try {
           var detections = detectFrame();
 
+          // ROI: tieni SOLO le masse il cui centroide è dentro l'area calibrata.
+          // Così il movimento fuori dall'area proiettata viene ignorato.
+          detections = detections.filter(function (d) {
+            return pointInQuad(d.x / W, d.y / H, calibPts);
+          });
+
           // FPS
           var now = performance.now();
           if (detectFpsLast > 0) {
@@ -2004,6 +2026,19 @@
       maskCtx.putImageData(maskImgData, 0, 0);
       diagCtx.imageSmoothingEnabled = false;
       diagCtx.drawImage(maskCanvas, 0, 0, dW, dH);
+
+      // 2b) contorno area attiva (sempre visibile): fuori = ignorato
+      if (!calibMode) {
+        diagCtx.strokeStyle = 'rgba(0,229,255,0.7)';
+        diagCtx.lineWidth = 1.5;
+        diagCtx.setLineDash([6, 4]);
+        diagCtx.beginPath();
+        diagCtx.moveTo(calibPts[0].x * dW, calibPts[0].y * dH);
+        for (var qq = 1; qq < 4; qq++) diagCtx.lineTo(calibPts[qq].x * dW, calibPts[qq].y * dH);
+        diagCtx.closePath();
+        diagCtx.stroke();
+        diagCtx.setLineDash([]);
+      }
 
       // 3) per ogni massa: cerchio di ingombro + centroide + ID
       // (id null = candidata non confermata → grigio tratteggiato, niente label)
