@@ -1,0 +1,20 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sciuscella — Proiezione</title>
+  <style>html,body{margin:0;height:100%;background:#000;color:#888;
+    font-family:Helvetica,Arial,sans-serif;display:flex;align-items:center;
+    justify-content:center;font-size:14px;letter-spacing:.1em}</style>
+</head>
+<body>
+  Avvio proiezione…
+  <script>
+    // Reindirizza alla modalità proiezione SENZA che l'utente debba digitare
+    // il "?proj=1" (difficile col telecomando, e Brave tende a interpretare
+    // il "?" come ricerca). Così basta scrivere: <ip>:8000/proj.html
+    location.replace('p.html?proj=1');
+  </script>
+</body>
+</html>

@@ -193,7 +193,8 @@
     // camera). Riceve le scie dalla finestra operatore via RETE (server-ponte
     // server.py): operatore POST /state, proiezione GET /state. Così funziona
     // anche su DUE dispositivi diversi (Mac + proiettore Android).
-    var IS_PROJ = new URLSearchParams(location.search).get('proj') === '1';
+    var IS_PROJ = new URLSearchParams(location.search).get('proj') === '1'
+                  || /proj/i.test(location.pathname);
     if (IS_PROJ) document.body.classList.add('proj');
 
     // Stato di rete inviato dall'operatore
