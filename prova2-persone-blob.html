@@ -39,6 +39,14 @@
     #ui button:hover { background: rgba(255,255,255,0.15); }
     #ui button.on    { background: rgba(255,255,255,0.32); color: #fff; }
 
+    /* ── Modalità proiezione: solo l'installazione, niente UI ──────────── */
+    body.proj #ui,
+    body.proj #hands-diag,
+    body.proj #loading,
+    body.proj #video { display: none !important; }
+    body.proj { cursor: none; background: #000; }
+    body.proj #canvas { position: fixed; inset: 0; }
+
     /* ── Diagnostic box ─────────────────────────────────────────── */
     #hands-diag {
       position: fixed;
@@ -153,6 +161,7 @@
     <button id="btnCam"       title="Cambia camera (cicla tra le webcam disponibili)">📷 Cam</button>
     <button id="btnMirror"    title="Toggle mirror (spegni per camera dall'alto)">↔ Mirror</button>
     <button id="btnCalibrate" title="Cattura lo sfondo: esci dall'inquadratura e premi (B)">🎯 Calibra</button>
+    <button id="btnProject"   title="Apri la finestra di proiezione pulita (P)">▶ Proietta</button>
   </div>
 
   <!-- ── Visualizzatore diagnostico blob tracking ─────────────────────── -->
@@ -178,6 +187,13 @@
   <script>
   (function () {
     'use strict';
+
+    // ── Modalità: operatore (default) o proiezione (?proj=1) ─────────────────
+    // La finestra proiezione mostra SOLO l'installazione (niente UI, niente
+    // camera). Riceve le scie dalla finestra operatore via BroadcastChannel.
+    var IS_PROJ = new URLSearchParams(location.search).get('proj') === '1';
+    var channel = new BroadcastChannel('sciuscella-proj');
+    if (IS_PROJ) document.body.classList.add('proj');
 
     // ── Canvas (full-window, niente DPR: 1px CSS = 1px canvas, come index) ────
     var canvas = document.getElementById('canvas');
@@ -1434,6 +1450,8 @@
           // non cancella, non lascia scia — solo visibile nel diag in grigio).
           // Posizione e raggio vengono lisciati (EMA) per evitare jitter.
           var seen = {};
+          var projStamps = [];   // scie normalizzate da inviare alla proiezione
+          var minDim = Math.min(W, H);
           for (var i = 0; i < detections.length; i++) {
             detections[i].id = ids[i];
             if (ids[i] === null) continue;
@@ -1451,7 +1469,18 @@
             smoothedR[label] = detections[i].r;
 
             erasePerson(detections[i].x, detections[i].y, label, detections[i].r);
+
+            // coordinate normalizzate (0..1) → indipendenti dalla risoluzione
+            projStamps.push({
+              id: ids[i],
+              nx: detections[i].x / W,
+              ny: detections[i].y / H,
+              nr: detections[i].r / minDim
+            });
           }
+
+          // Invia le scie alla finestra di proiezione
+          channel.postMessage({ type: 'erase', stamps: projStamps });
 
           // Chiude la stroke SOLO quando il track è davvero morto
           // (non per un flicker di un frame: il track confermato resta vivo
@@ -1486,13 +1515,77 @@
     }
 
     // Boot
-    (async function boot() {
-      await initCamera();
-      // Auto-calibrazione dopo 1.5s: dà tempo all'esposizione di stabilizzarsi.
-      // Se sei in scena verrai "cotto" nello sfondo: esci e premi 🎯 Calibra (B).
-      setTimeout(function () { calibrateBackground(); }, 1500);
-      trackingLoop();
-    })();
+    // ── Proiezione: applica le scie ricevute dall'operatore ─────────────────
+    // Stessa logica di interpolazione di erasePerson, ma su coordinate
+    // NORMALIZZATE (0..1) → indipendenti dalla risoluzione del proiettore.
+    var projLast = {};   // { id: {x, y} } in px di QUESTA finestra
+    function projErase(nx, ny, nr, id) {
+      var lx = nx * W, ly = ny * H;
+      var r = Math.max(20, nr * Math.min(W, H));
+      var prev = projLast[id];
+      if (prev) {
+        var dx = lx - prev.x, dy = ly - prev.y;
+        var dist = Math.sqrt(dx * dx + dy * dy);
+        var step = r * 0.4;
+        var n = Math.max(1, Math.ceil(dist / step));
+        for (var s = 1; s <= n; s++) {
+          var t = s / n;
+          stampErase(prev.x + dx * t, prev.y + dy * t, r);
+        }
+      } else {
+        stampErase(lx, ly, r);
+      }
+      projLast[id] = { x: lx, y: ly };
+    }
+
+    if (IS_PROJ) {
+      // Finestra proiezione: nessuna camera. Solo render + ascolto canale.
+      channel.onmessage = function (ev) {
+        var msg = ev.data;
+        if (!msg) return;
+        if (msg.type === 'erase') {
+          var alive = {};
+          for (var i = 0; i < msg.stamps.length; i++) {
+            var st = msg.stamps[i];
+            alive[st.id] = true;
+            projErase(st.nx, st.ny, st.nr, st.id);
+          }
+          // chi non è più attivo → reset, così al ritorno non traccia una
+          // riga dritta dal vecchio punto
+          for (var k in projLast) if (!alive[k]) delete projLast[k];
+        } else if (msg.type === 'clear') {
+          projLast = {};
+          mCtx.globalCompositeOperation = 'source-over';
+          mCtx.fillStyle = PAGE_BG; mCtx.fillRect(0, 0, W, H);
+        } else if (msg.type === 'reveal') {
+          mCtx.globalCompositeOperation = 'source-over';
+          mCtx.clearRect(0, 0, W, H);
+        }
+      };
+      // Cambio risoluzione (drag sul proiettore / fullscreen) → ricarica
+      // pulita alla nuova dimensione (debounce). Niente camera/stato da perdere.
+      var projResizeT = null;
+      window.addEventListener('resize', function () {
+        clearTimeout(projResizeT);
+        projResizeT = setTimeout(function () { location.reload(); }, 400);
+      });
+      // F = toggle fullscreen (il keydown è un gesto utente valido)
+      document.addEventListener('keydown', function (e) {
+        if (e.key === 'f' || e.key === 'F') {
+          if (!document.fullscreenElement) document.documentElement.requestFullscreen();
+          else document.exitFullscreen();
+        }
+      });
+    } else {
+      // Finestra operatore: camera + tracking come sempre.
+      (async function boot() {
+        await initCamera();
+        // Auto-calibrazione dopo 1.5s: dà tempo all'esposizione di stabilizzarsi.
+        // Se sei in scena verrai "cotto" nello sfondo: esci e premi 🎯 Calibra (B).
+        setTimeout(function () { calibrateBackground(); }, 1500);
+        trackingLoop();
+      })();
+    }
 
     // ── Export SVG del percorso mano ─────────────────────────────────────────
     // ── Smoothing della stroke: 1 passo WMA + Catmull-Rom con tensione media ─
@@ -1581,10 +1674,12 @@
       lastErasePos = {};
       mCtx.globalCompositeOperation = 'source-over';
       mCtx.fillStyle = PAGE_BG; mCtx.fillRect(0, 0, W, H);
+      if (!IS_PROJ) channel.postMessage({ type: 'clear' });
     }
     function revealAll() {
       mCtx.globalCompositeOperation = 'source-over';
       mCtx.clearRect(0, 0, W, H);
+      if (!IS_PROJ) channel.postMessage({ type: 'reveal' });
     }
 
     // ── Export poster A4 (PNG, sfondo trasparente) ───────────────────────────
@@ -1917,6 +2012,16 @@
       calibrateBackground();
     });
 
+    // Apri finestra di proiezione pulita (2° schermo / proiettore)
+    var projWin = null;
+    function openProjection() {
+      if (projWin && !projWin.closed) { projWin.focus(); return; }
+      // finestra grande, da trascinare sul proiettore e mettere fullscreen (tasto F)
+      projWin = window.open(location.pathname + '?proj=1', 'sciuscella_proj',
+        'width=1280,height=800');
+    }
+    document.getElementById('btnProject').addEventListener('click', openProjection);
+
     // Slider sensibilità (soglia di differenza)
     var sensSlider = document.getElementById('sensSlider');
     var sensValue  = document.getElementById('sensValue');
@@ -1939,6 +2044,7 @@
       if (e.key === 'a' || e.key === 'A') exportA4();
       if (e.key === 'd' || e.key === 'D') setDiag(!diagVisible);
       if (e.key === 'b' || e.key === 'B') calibrateBackground();
+      if (e.key === 'p' || e.key === 'P') openProjection();
     });
 
     requestAnimationFrame(render);
