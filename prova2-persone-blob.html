@@ -64,9 +64,13 @@
       color: rgba(255,255,255,0.92);
       font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif;
       box-shadow: 0 18px 40px rgba(0,0,0,0.5);
-      resize: horizontal;       /* trascina l'angolo in basso a destra */
+      resize: horizontal;       /* maniglia in basso a SINISTRA (vedi direction) */
       overflow: auto;
+      direction: rtl;           /* sposta la maniglia di resize a sinistra:
+                                   il pannello è ancorato a destra, così si
+                                   allarga verso il centro dello schermo */
     }
+    #hands-diag > * { direction: ltr; }  /* contenuto normale (non specchiato) */
     /* maniglia di resize più visibile */
     #hands-diag::-webkit-resizer { background: rgba(255,255,255,0.25); }
     .diag-header {
