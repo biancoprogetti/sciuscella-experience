@@ -1571,26 +1571,30 @@
             var label = 'P' + ids[i];
             seen[label] = true;
 
+            // 1) Omografia: camera (normalizzata) → proiezione (normalizzata)
+            var hp = applyHom(detections[i].x / W, detections[i].y / H);
+            var ex = hp.x * W, ey = hp.y * H;   // posizione in px canvas
+
+            // 2) Smoothing (EMA) NELLO STESSO SPAZIO (canvas): lastErasePos è
+            //    già in coord canvas → niente più mix di spazi (era il bug che
+            //    faceva "saltare" la posizione e rivelare tutta la fascia)
             var prevPos = lastErasePos[label];
             if (prevPos) {
-              detections[i].x = prevPos.x + (detections[i].x - prevPos.x) * 0.45;
-              detections[i].y = prevPos.y + (detections[i].y - prevPos.y) * 0.45;
+              ex = prevPos.x + (ex - prevPos.x) * 0.45;
+              ey = prevPos.y + (ey - prevPos.y) * 0.45;
             }
             var prevR = smoothedR[label];
             if (prevR) detections[i].r = prevR + (detections[i].r - prevR) * 0.25;
             smoothedR[label] = detections[i].r;
 
-            // Omografia: posizione camera (normalizzata) → posizione proiezione
-            var hp = applyHom(detections[i].x / W, detections[i].y / H);
+            // erase locale (anteprima operatore)
+            erasePerson(ex, ey, label, detections[i].r);
 
-            // erase locale (anteprima operatore) alla posizione corretta
-            erasePerson(hp.x * W, hp.y * H, label, detections[i].r);
-
-            // coordinate normalizzate corrette → indipendenti dalla risoluzione
+            // coordinate normalizzate per la proiezione
             projStamps.push({
               id: ids[i],
-              nx: hp.x,
-              ny: hp.y,
+              nx: ex / W,
+              ny: ey / H,
               nr: detections[i].r / minDim
             });
           }
