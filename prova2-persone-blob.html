@@ -160,7 +160,8 @@
     <button id="btnDiag"      title="Visualizzatore blob (D)">📷 Diag</button>
     <button id="btnCam"       title="Cambia camera (cicla tra le webcam disponibili)">📷 Cam</button>
     <button id="btnMirror"    title="Toggle mirror (spegni per camera dall'alto)">↔ Mirror</button>
-    <button id="btnCalibrate" title="Cattura lo sfondo: esci dall'inquadratura e premi (B)">🎯 Calibra</button>
+    <button id="btnCalibrate" title="Cattura lo sfondo: esci dall'inquadratura e premi (B)">🎯 Sfondo</button>
+    <button id="btnCalibGeo"  title="Calibra geometria: clicca i 4 angoli dell'area nel diag (G)">◳ Geo</button>
     <button id="btnProject"   title="Apri la finestra di proiezione pulita (P)">▶ Proietta</button>
   </div>
 
@@ -198,8 +199,9 @@
     if (IS_PROJ) document.body.classList.add('proj');
 
     // Stato di rete inviato dall'operatore
-    var netState = { frame: 0, stamps: [], clearSeq: 0, revealSeq: 0 };
+    var netState = { frame: 0, stamps: [], clearSeq: 0, revealSeq: 0, calib: 0 };
     var netPosting = false;
+    var projCalib = 0;   // (proiezione) 1 = mostra i 4 angoli di calibrazione
 
     function netPost() {
       if (netPosting) return;            // niente invii sovrapposti
@@ -211,6 +213,64 @@
         keepalive: true
       }).catch(function () {}).finally(function () { netPosting = false; });
     }
+
+    // ── Calibrazione geometrica (omografia camera → proiezione) ──────────────
+    // La camera dall'alto vede il pavimento da un angolo: la mappatura lineare
+    // non basta. Marcando i 4 angoli dell'area proiettata (come li vede la
+    // camera) calcoliamo un'omografia che "raddrizza" ogni posizione.
+    var homH = null;                 // matrice attiva (null = mappatura lineare)
+    var calibMode = false;
+    var calibPts = [];               // punti cliccati in coord camera normalizzate
+    var CALIB_DST = [{x:0,y:0},{x:1,y:0},{x:1,y:1},{x:0,y:1}]; // TL,TR,BR,BL
+
+    function computeHomography(src, dst) {
+      var A = [], b = [];
+      for (var i = 0; i < 4; i++) {
+        var x = src[i].x, y = src[i].y, u = dst[i].x, v = dst[i].y;
+        A.push([x, y, 1, 0, 0, 0, -x*u, -y*u]); b.push(u);
+        A.push([0, 0, 0, x, y, 1, -x*v, -y*v]); b.push(v);
+      }
+      for (var col = 0; col < 8; col++) {
+        var piv = col;
+        for (var r = col+1; r < 8; r++) if (Math.abs(A[r][col]) > Math.abs(A[piv][col])) piv = r;
+        var tA = A[col]; A[col] = A[piv]; A[piv] = tA;
+        var tb = b[col]; b[col] = b[piv]; b[piv] = tb;
+        var d = A[col][col];
+        if (Math.abs(d) < 1e-12) return null;
+        for (var c = col; c < 8; c++) A[col][c] /= d;
+        b[col] /= d;
+        for (var r2 = 0; r2 < 8; r2++) {
+          if (r2 === col) continue;
+          var f = A[r2][col];
+          for (var c2 = col; c2 < 8; c2++) A[r2][c2] -= f * A[col][c2];
+          b[r2] -= f * b[col];
+        }
+      }
+      return b;
+    }
+    // applica omografia a coord normalizzate (0..1) → coord normalizzate
+    function applyHom(nx, ny) {
+      if (!homH) return { x: nx, y: ny };
+      var den = homH[6]*nx + homH[7]*ny + 1;
+      if (Math.abs(den) < 1e-9) return { x: nx, y: ny };
+      return {
+        x: (homH[0]*nx + homH[1]*ny + homH[2]) / den,
+        y: (homH[3]*nx + homH[4]*ny + homH[5]) / den
+      };
+    }
+    // carica calibrazione salvata
+    (function loadCalib() {
+      try {
+        var s = localStorage.getItem('sciuscella_calib');
+        if (s) {
+          var pts = JSON.parse(s);
+          if (pts && pts.length === 4) {
+            homH = computeHomography(pts, CALIB_DST);
+            calibPts = pts;
+          }
+        }
+      } catch (e) {}
+    })();
 
     // ── Canvas (full-window, niente DPR: 1px CSS = 1px canvas, come index) ────
     var canvas = document.getElementById('canvas');
@@ -1117,6 +1177,36 @@
       ctx.globalAlpha = GRAIN_ALPHA;
       ctx.drawImage(grainLayer, 0, 0);
       ctx.restore();
+
+      // Proiezione in calibrazione: 4 angoli numerati da cliccare nel diag
+      if (IS_PROJ && projCalib) drawCalibCorners(ctx);
+    }
+
+    // Angoli numerati (TL=1, TR=2, BR=3, BL=4) all'interno del canvas, da
+    // proiettare a terra: l'operatore li clicca nel diag nello stesso ordine.
+    function drawCalibCorners(c) {
+      var ins = Math.round(Math.min(W, H) * 0.06);
+      var pts = [
+        { x: ins,     y: ins,     n: 1 },
+        { x: W - ins, y: ins,     n: 2 },
+        { x: W - ins, y: H - ins, n: 3 },
+        { x: ins,     y: H - ins, n: 4 }
+      ];
+      c.save();
+      c.setTransform(1, 0, 0, 1, 0, 0);
+      var R = Math.round(Math.min(W, H) * 0.04);
+      for (var i = 0; i < 4; i++) {
+        var p = pts[i];
+        c.fillStyle = '#ff0066';
+        c.beginPath(); c.arc(p.x, p.y, R, 0, Math.PI * 2); c.fill();
+        c.strokeStyle = '#fff'; c.lineWidth = 3;
+        c.beginPath(); c.arc(p.x, p.y, R, 0, Math.PI * 2); c.stroke();
+        c.fillStyle = '#fff';
+        c.font = 'bold ' + Math.round(R * 1.1) + 'px Helvetica, Arial, sans-serif';
+        c.textAlign = 'center'; c.textBaseline = 'middle';
+        c.fillText(String(p.n), p.x, p.y);
+      }
+      c.restore();
     }
 
     // ── Blob tracking via background subtraction (niente ML) ─────────────────
@@ -1485,13 +1575,17 @@
             if (prevR) detections[i].r = prevR + (detections[i].r - prevR) * 0.25;
             smoothedR[label] = detections[i].r;
 
-            erasePerson(detections[i].x, detections[i].y, label, detections[i].r);
+            // Omografia: posizione camera (normalizzata) → posizione proiezione
+            var hp = applyHom(detections[i].x / W, detections[i].y / H);
 
-            // coordinate normalizzate (0..1) → indipendenti dalla risoluzione
+            // erase locale (anteprima operatore) alla posizione corretta
+            erasePerson(hp.x * W, hp.y * H, label, detections[i].r);
+
+            // coordinate normalizzate corrette → indipendenti dalla risoluzione
             projStamps.push({
               id: ids[i],
-              nx: detections[i].x / W,
-              ny: detections[i].y / H,
+              nx: hp.x,
+              ny: hp.y,
               nr: detections[i].r / minDim
             });
           }
@@ -1569,6 +1663,7 @@
           .then(function (r) { return r.json(); })
           .then(function (msg) {
             if (!msg) return;
+            projCalib = msg.calib || 0;
             // Clear / Reveal: applica una sola volta (seq monotone)
             if (msg.clearSeq > appliedClear) {
               appliedClear = msg.clearSeq;
@@ -2013,13 +2108,62 @@
         diagCtx.fillStyle = '#ffe600';
         diagCtx.font = 'bold 11px "Helvetica Neue", Helvetica, Arial, sans-serif';
         diagCtx.textAlign = 'center';
-        diagCtx.fillText('SFONDO NON CALIBRATO — premi 🎯 Calibra', dW / 2, dH / 2 + 4);
+        diagCtx.fillText('SFONDO NON CALIBRATO — premi 🎯 Sfondo', dW / 2, dH / 2 + 4);
         diagCtx.textAlign = 'left';
+      }
+
+      // Calibrazione geometria: mostra i punti cliccati e quale manca
+      if (calibMode) {
+        diagCtx.fillStyle = 'rgba(0,0,0,0.55)';
+        diagCtx.fillRect(0, 0, dW, 20);
+        diagCtx.fillStyle = '#ff66a3';
+        diagCtx.font = 'bold 11px "Helvetica Neue", Helvetica, Arial, sans-serif';
+        diagCtx.textAlign = 'left';
+        diagCtx.fillText('CLICCA L\'ANGOLO ' + (calibPts.length + 1) + '/4 (rosa sulla proiezione)', 6, 14);
+        for (var ci = 0; ci < calibPts.length; ci++) {
+          var cpx = calibPts[ci].x * dW, cpy = calibPts[ci].y * dH;
+          diagCtx.fillStyle = '#ff0066';
+          diagCtx.beginPath(); diagCtx.arc(cpx, cpy, 6, 0, Math.PI * 2); diagCtx.fill();
+          diagCtx.fillStyle = '#fff';
+          diagCtx.font = 'bold 10px Helvetica, Arial, sans-serif';
+          diagCtx.textAlign = 'center'; diagCtx.textBaseline = 'middle';
+          diagCtx.fillText(String(ci + 1), cpx, cpy);
+        }
+        diagCtx.textBaseline = 'alphabetic';
       }
 
       diagStats.textContent = detections.length + ' masse · ' +
         (occluded > 0 ? occluded + ' occluse · ' : '') + detectFps + ' fps';
     }
+
+    // ── Calibrazione geometria: cattura click sul diag ────────────────────
+    function enterCalibGeo() {
+      calibMode = true;
+      calibPts = [];
+      netState.calib = 1; netPost();
+      setDiag(true);
+      document.getElementById('btnCalibGeo').classList.add('on');
+    }
+    function exitCalibGeo(save) {
+      if (save && calibPts.length === 4) {
+        homH = computeHomography(calibPts, CALIB_DST);
+        try { localStorage.setItem('sciuscella_calib', JSON.stringify(calibPts)); } catch (e) {}
+      }
+      calibMode = false;
+      netState.calib = 0; netPost();
+      document.getElementById('btnCalibGeo').classList.remove('on');
+    }
+    document.getElementById('btnCalibGeo').addEventListener('click', function () {
+      if (calibMode) exitCalibGeo(false); else enterCalibGeo();
+    });
+    diagCanvas.addEventListener('click', function (e) {
+      if (!calibMode) return;
+      var rect = diagCanvas.getBoundingClientRect();
+      var nx = (e.clientX - rect.left) / rect.width;
+      var ny = (e.clientY - rect.top) / rect.height;
+      calibPts.push({ x: nx, y: ny });
+      if (calibPts.length === 4) exitCalibGeo(true);
+    });
 
     document.getElementById('btnDiag').addEventListener('click', function () { setDiag(!diagVisible); });
 
@@ -2081,6 +2225,7 @@
       if (e.key === 'd' || e.key === 'D') setDiag(!diagVisible);
       if (e.key === 'b' || e.key === 'B') calibrateBackground();
       if (e.key === 'p' || e.key === 'P') openProjection();
+      if (e.key === 'g' || e.key === 'G') { if (calibMode) exitCalibGeo(false); else enterCalibGeo(); }
     });
 
     requestAnimationFrame(render);

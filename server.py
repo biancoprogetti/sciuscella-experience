@@ -26,6 +26,7 @@ state = {
     "stamps": [],      # [{id, nx, ny, nr}] coordinate normalizzate 0..1
     "clearSeq": 0,     # bump quando l'operatore preme Clear
     "revealSeq": 0,    # bump quando l'operatore preme Reveal
+    "calib": 0,        # 1 = modalità calibrazione (proiezione mostra gli angoli)
 }
 
 
@@ -69,6 +70,7 @@ class Handler(SimpleHTTPRequestHandler):
                 state["stamps"] = incoming.get("stamps", [])
                 state["clearSeq"] = incoming.get("clearSeq", state["clearSeq"])
                 state["revealSeq"] = incoming.get("revealSeq", state["revealSeq"])
+                state["calib"] = incoming.get("calib", state["calib"])
             except (ValueError, KeyError):
                 pass
             self.send_response(200)
