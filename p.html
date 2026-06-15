@@ -172,6 +172,7 @@
     <button id="btnCalibrate" title="Cattura lo sfondo: esci dall'inquadratura e premi (B)">🎯 Sfondo</button>
     <button id="btnCalibGeo"  title="Calibra area: trascina i 4 angoli sull'area proiettata nel diag (G)">◳ Area</button>
     <button id="btnCalibReset" title="Rimetti i 4 angoli ai bordi e ricomincia la calibrazione (K)">↺ Angoli</button>
+    <button id="btnFs"        title="Manda a tutto schermo la proiezione (F)">⛶ Schermo</button>
   </div>
 
   <!-- ── Visualizzatore diagnostico blob tracking ─────────────────────── -->
@@ -208,7 +209,7 @@
     if (IS_PROJ) document.body.classList.add('proj');
 
     // Stato di rete inviato dall'operatore
-    var netState = { frame: 0, stamps: [], clearSeq: 0, revealSeq: 0, calib: 0 };
+    var netState = { frame: 0, stamps: [], clearSeq: 0, revealSeq: 0, calib: 0, fsSeq: 0 };
     var netPosting = false;
     var projCalib = 0;   // (proiezione) 1 = mostra i 4 numeri agli angoli
 
@@ -1109,13 +1110,17 @@
     }
 
     // stampErase con raggio variabile: ogni massa cancella col suo ingombro
+    var ERASE_SCALE = 0.62;   // gomma più piccola del raggio d'ingombro
     function stampErase(lx, ly, r) {
-      r = r || ERASER_R;
+      r = (r || ERASER_R) * ERASE_SCALE;
       mCtx.globalCompositeOperation = 'destination-out';
       var g = mCtx.createRadialGradient(lx, ly, 0, lx, ly, r);
-      g.addColorStop(0,    'rgba(0,0,0,0.28)');
-      g.addColorStop(0.45, 'rgba(0,0,0,0.16)');
-      g.addColorStop(0.80, 'rgba(0,0,0,0.06)');
+      // molto sfumata: alpha bassa al centro + caduta lunga e morbida verso
+      // il bordo → la scia si apre piano e i contorni del cerchio spariscono
+      g.addColorStop(0,    'rgba(0,0,0,0.16)');
+      g.addColorStop(0.25, 'rgba(0,0,0,0.10)');
+      g.addColorStop(0.55, 'rgba(0,0,0,0.04)');
+      g.addColorStop(0.80, 'rgba(0,0,0,0.012)');
       g.addColorStop(1,    'rgba(0,0,0,0)');
       mCtx.fillStyle = g;
       mCtx.beginPath();
@@ -1617,8 +1622,8 @@
             //    faceva "saltare" la posizione e rivelare tutta la fascia)
             var prevPos = lastErasePos[label];
             if (prevPos) {
-              ex = prevPos.x + (ex - prevPos.x) * 0.45;
-              ey = prevPos.y + (ey - prevPos.y) * 0.45;
+              ex = prevPos.x + (ex - prevPos.x) * 0.7;   // più reattivo (meno lag)
+              ey = prevPos.y + (ey - prevPos.y) * 0.7;
             }
             var prevR = smoothedR[label];
             if (prevR) detections[i].r = prevR + (detections[i].r - prevR) * 0.25;
@@ -1737,7 +1742,7 @@
           .catch(function () {})
           .finally(function () { polling = false; });
       }
-      setInterval(pollState, 33);   // ~30 Hz
+      setInterval(pollState, 16);   // ~60 Hz: meno ritardo sulla proiezione
 
       // Cambio risoluzione (drag sul proiettore / fullscreen) → ricarica
       // pulita alla nuova dimensione (debounce). Niente camera/stato da perdere.
@@ -1746,12 +1751,48 @@
         clearTimeout(projResizeT);
         projResizeT = setTimeout(function () { location.reload(); }, 400);
       });
-      // F = toggle fullscreen (il keydown è un gesto utente valido)
-      document.addEventListener('keydown', function (e) {
-        if (e.key === 'f' || e.key === 'F') {
-          if (!document.fullscreenElement) document.documentElement.requestFullscreen();
-          else document.exitFullscreen();
+      // Fullscreen toggle locale: F da tastiera, oppure un tocco/clic/OK del
+      // telecomando sulla finestra (sono tutti "gesti utente" validi).
+      function projToggleFs() {
+        if (!document.fullscreenElement) {
+          var el = document.documentElement;
+          (el.requestFullscreen || el.webkitRequestFullscreen || function(){}).call(el);
+        } else {
+          (document.exitFullscreen || document.webkitExitFullscreen || function(){}).call(document);
         }
+      }
+      document.addEventListener('keydown', function (e) {
+        if (e.key === 'f' || e.key === 'F' || e.key === 'Enter') projToggleFs();
+      });
+      document.addEventListener('click', projToggleFs);
+      document.addEventListener('touchend', projToggleFs);
+
+      // Comando fullscreen inviato dal Mac: tenta (può essere bloccato dal
+      // browser senza un gesto utente; in tal caso usa il tocco/OK qui sopra).
+      var appliedFs = 0;
+      var fsPoll = setInterval(function () {
+        fetch('/state', { cache: 'no-store' })
+          .then(function (r) { return r.json(); })
+          .then(function (m) {
+            if (m && m.fsSeq > appliedFs) {
+              appliedFs = m.fsSeq;
+              if (!document.fullscreenElement) {
+                var el = document.documentElement;
+                try { (el.requestFullscreen || el.webkitRequestFullscreen).call(el); } catch (e) {}
+              }
+            }
+          }).catch(function () {});
+      }, 500);
+
+      // Suggerimento iniziale: come andare a tutto schermo
+      var fsHint = document.createElement('div');
+      fsHint.textContent = 'Tocca lo schermo (o premi OK) per andare a tutto schermo';
+      fsHint.style.cssText = 'position:fixed;left:50%;bottom:8%;transform:translateX(-50%);' +
+        'background:rgba(0,0,0,0.6);color:#fff;font-family:Helvetica,Arial,sans-serif;' +
+        'font-size:13px;letter-spacing:.08em;padding:8px 14px;border-radius:8px;z-index:300;';
+      document.body.appendChild(fsHint);
+      document.addEventListener('fullscreenchange', function () {
+        fsHint.style.display = document.fullscreenElement ? 'none' : 'block';
       });
     } else {
       // Finestra operatore: camera + tracking come sempre.
@@ -2235,6 +2276,10 @@
     });
     document.getElementById('btnCalibReset').addEventListener('click', resetCalibCorners);
 
+    // Manda a tutto schermo la finestra di proiezione (dal Mac)
+    function requestProjFullscreen() { netState.fsSeq = (netState.fsSeq || 0) + 1; netPost(); }
+    document.getElementById('btnFs').addEventListener('click', requestProjFullscreen);
+
     function diagEventNorm(e) {
       var rect = diagCanvas.getBoundingClientRect();
       var cx = (e.touches ? e.touches[0].clientX : e.clientX);
@@ -2335,6 +2380,7 @@
       if (e.key === 'm' || e.key === 'M') toggleFlipX();
       if (e.key === 'g' || e.key === 'G') { if (calibMode) exitCalibGeo(); else enterCalibGeo(); }
       if (e.key === 'k' || e.key === 'K') resetCalibCorners();
+      if (e.key === 'f' || e.key === 'F') requestProjFullscreen();
     });
 
     requestAnimationFrame(render);

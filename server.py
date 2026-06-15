@@ -27,6 +27,7 @@ state = {
     "clearSeq": 0,     # bump quando l'operatore preme Clear
     "revealSeq": 0,    # bump quando l'operatore preme Reveal
     "calib": 0,        # 1 = modalità calibrazione (proiezione mostra gli angoli)
+    "fsSeq": 0,        # bump → la proiezione tenta il fullscreen
 }
 
 
@@ -71,6 +72,7 @@ class Handler(SimpleHTTPRequestHandler):
                 state["clearSeq"] = incoming.get("clearSeq", state["clearSeq"])
                 state["revealSeq"] = incoming.get("revealSeq", state["revealSeq"])
                 state["calib"] = incoming.get("calib", state["calib"])
+                state["fsSeq"] = incoming.get("fsSeq", state["fsSeq"])
             except (ValueError, KeyError):
                 pass
             self.send_response(200)
