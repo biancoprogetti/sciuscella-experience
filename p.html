@@ -171,6 +171,7 @@
     <button id="btnMirror"    title="Toggle mirror (spegni per camera dall'alto)">↔ Mirror</button>
     <button id="btnCalibrate" title="Cattura lo sfondo: esci dall'inquadratura e premi (B)">🎯 Sfondo</button>
     <button id="btnCalibGeo"  title="Calibra area: trascina i 4 angoli sull'area proiettata nel diag (G)">◳ Area</button>
+    <button id="btnCalibReset" title="Rimetti i 4 angoli ai bordi e ricomincia la calibrazione (K)">↺ Angoli</button>
   </div>
 
   <!-- ── Visualizzatore diagnostico blob tracking ─────────────────────── -->
@@ -207,8 +208,9 @@
     if (IS_PROJ) document.body.classList.add('proj');
 
     // Stato di rete inviato dall'operatore
-    var netState = { frame: 0, stamps: [], clearSeq: 0, revealSeq: 0 };
+    var netState = { frame: 0, stamps: [], clearSeq: 0, revealSeq: 0, calib: 0 };
     var netPosting = false;
+    var projCalib = 0;   // (proiezione) 1 = mostra i 4 numeri agli angoli
 
     function netPost() {
       if (netPosting) return;            // niente invii sovrapposti
@@ -1205,6 +1207,36 @@
       ctx.globalAlpha = GRAIN_ALPHA;
       ctx.drawImage(grainLayer, 0, 0);
       ctx.restore();
+
+      // In calibrazione: numeri agli angoli del canvas, proiettati a terra.
+      // L'operatore trascina la maniglia N sul numero N che vede nella camera
+      // → corrispondenza (e direzione) sempre corretta, anche se camera ruotata.
+      if (IS_PROJ && projCalib) drawCalibCorners(ctx);
+    }
+
+    function drawCalibCorners(c) {
+      var ins = Math.round(Math.min(W, H) * 0.08);
+      var pts = [
+        { x: ins,     y: ins,     n: 1 },
+        { x: W - ins, y: ins,     n: 2 },
+        { x: W - ins, y: H - ins, n: 3 },
+        { x: ins,     y: H - ins, n: 4 }
+      ];
+      c.save();
+      c.setTransform(1, 0, 0, 1, 0, 0);
+      var R = Math.round(Math.min(W, H) * 0.06);
+      for (var i = 0; i < 4; i++) {
+        var p = pts[i];
+        c.fillStyle = '#ff0066';
+        c.beginPath(); c.arc(p.x, p.y, R, 0, Math.PI * 2); c.fill();
+        c.strokeStyle = '#fff'; c.lineWidth = 4;
+        c.beginPath(); c.arc(p.x, p.y, R, 0, Math.PI * 2); c.stroke();
+        c.fillStyle = '#fff';
+        c.font = 'bold ' + Math.round(R * 1.2) + 'px Helvetica, Arial, sans-serif';
+        c.textAlign = 'center'; c.textBaseline = 'middle';
+        c.fillText(String(p.n), p.x, p.y);
+      }
+      c.restore();
     }
 
     // ── Blob tracking via background subtraction (niente ML) ─────────────────
@@ -1672,6 +1704,7 @@
           .then(function (r) { return r.json(); })
           .then(function (msg) {
             if (!msg) return;
+            projCalib = msg.calib || 0;
             // Clear / Reveal: applica una sola volta (seq monotone)
             if (msg.clearSeq > appliedClear) {
               appliedClear = msg.clearSeq;
@@ -2166,7 +2199,7 @@
         diagCtx.fillStyle = '#ff66a3';
         diagCtx.font = 'bold 11px "Helvetica Neue", Helvetica, Arial, sans-serif';
         diagCtx.textAlign = 'left';
-        diagCtx.fillText('TRASCINA i 4 angoli sull\'area proiettata · G per uscire', 6, 14);
+        diagCtx.fillText('TRASCINA la maniglia N sul numero N proiettato · G per uscire', 6, 14);
       }
 
       diagStats.textContent = detections.length + ' masse · ' +
@@ -2176,6 +2209,7 @@
     // ── Calibrazione area: trascina i 4 angoli sul feed camera ────────────
     function enterCalibGeo() {
       calibMode = true;
+      netState.calib = 1; netPost();   // la proiezione mostra i numeri 1..4
       setDiag(true);
       document.getElementById('btnCalibGeo').classList.add('on');
     }
@@ -2183,11 +2217,18 @@
       calibMode = false;
       calibDrag = -1;
       saveCalib();
+      netState.calib = 0; netPost();
       document.getElementById('btnCalibGeo').classList.remove('on');
+    }
+    function resetCalibCorners() {
+      calibPts = [{x:0.10,y:0.10},{x:0.90,y:0.10},{x:0.90,y:0.90},{x:0.10,y:0.90}];
+      rebuildHom();
+      if (!calibMode) enterCalibGeo();   // entra in calibrazione così li vedi
     }
     document.getElementById('btnCalibGeo').addEventListener('click', function () {
       if (calibMode) exitCalibGeo(); else enterCalibGeo();
     });
+    document.getElementById('btnCalibReset').addEventListener('click', resetCalibCorners);
 
     function diagEventNorm(e) {
       var rect = diagCanvas.getBoundingClientRect();
@@ -2286,6 +2327,7 @@
       if (e.key === 'p' || e.key === 'P') openProjection();
       if (e.key === 'v' || e.key === 'V') cycleCamera();
       if (e.key === 'g' || e.key === 'G') { if (calibMode) exitCalibGeo(); else enterCalibGeo(); }
+      if (e.key === 'k' || e.key === 'K') resetCalibCorners();
     });
 
     requestAnimationFrame(render);
