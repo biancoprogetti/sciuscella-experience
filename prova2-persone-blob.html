@@ -45,7 +45,7 @@
     body.proj #loading,
     body.proj #video { display: none !important; }
     body.proj { cursor: none; background: #000; }
-    body.proj #canvas { position: fixed; inset: 0; }
+    body.proj #canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; }
 
     /* ── Diagnostic box ─────────────────────────────────────────── */
     #hands-diag {
@@ -276,6 +276,19 @@
       };
     }
     function rebuildHom() { homH = computeHomography(calibPts, CALIB_DST); }
+
+    // Quad allargato verso l'esterno attorno al suo centro (margine ROI):
+    // così chi è metà dentro / metà fuori l'area viene comunque accettato.
+    var ROI_MARGIN = 0.18;   // 18% verso l'esterno
+    function expandedQuad(quad) {
+      var cx = 0, cy = 0;
+      for (var i = 0; i < 4; i++) { cx += quad[i].x; cy += quad[i].y; }
+      cx /= 4; cy /= 4;
+      var f = 1 + ROI_MARGIN;
+      return quad.map(function (p) {
+        return { x: cx + (p.x - cx) * f, y: cy + (p.y - cy) * f };
+      });
+    }
 
     // Punto (coord camera normalizzate) dentro il quad di calibrazione?
     // Quad convesso ordinato (TL,TR,BR,BL) → segno coerente dei prodotti vettoriali.
@@ -1115,12 +1128,11 @@
       r = (r || ERASER_R) * ERASE_SCALE;
       mCtx.globalCompositeOperation = 'destination-out';
       var g = mCtx.createRadialGradient(lx, ly, 0, lx, ly, r);
-      // molto sfumata: alpha bassa al centro + caduta lunga e morbida verso
-      // il bordo → la scia si apre piano e i contorni del cerchio spariscono
-      g.addColorStop(0,    'rgba(0,0,0,0.16)');
-      g.addColorStop(0.25, 'rgba(0,0,0,0.10)');
-      g.addColorStop(0.55, 'rgba(0,0,0,0.04)');
-      g.addColorStop(0.80, 'rgba(0,0,0,0.012)');
+      // sfumata ma con un po' più di "presa" al centro (rivela meglio sotto)
+      g.addColorStop(0,    'rgba(0,0,0,0.24)');
+      g.addColorStop(0.30, 'rgba(0,0,0,0.15)');
+      g.addColorStop(0.60, 'rgba(0,0,0,0.06)');
+      g.addColorStop(0.82, 'rgba(0,0,0,0.018)');
       g.addColorStop(1,    'rgba(0,0,0,0)');
       mCtx.fillStyle = g;
       mCtx.beginPath();
@@ -1265,7 +1277,7 @@
     var MAX_BLOBS            = 8;      // massimo masse tracciate per frame
     var MERGE_GAP_PX         = 14;     // gap max (px proc) tra blob per considerarli UN corpo
     var BG_ADAPT             = 0.015;  // adattamento lento dello sfondo nelle zone statiche
-    var DETECTION_TARGET_FPS = 30;
+    var DETECTION_TARGET_FPS = 45;   // più alto = tracciamento più reattivo
     var MIRROR_VIDEO         = true;   // selfie mode (spegni per camera dall'alto)
 
     // Buffer di lavoro
@@ -1578,10 +1590,12 @@
         try {
           var detections = detectFrame();
 
-          // ROI: tieni SOLO le masse il cui centroide è dentro l'area calibrata.
-          // Così il movimento fuori dall'area proiettata viene ignorato.
+          // ROI: tieni le masse il cui centroide è dentro l'area calibrata
+          // ALLARGATA del margine → chi è sul bordo (metà dentro/fuori) passa.
+          // Il movimento ben fuori dall'area resta ignorato.
+          var roiQuad = expandedQuad(calibPts);
           detections = detections.filter(function (d) {
-            return pointInQuad(d.x / W, d.y / H, calibPts);
+            return pointInQuad(d.x / W, d.y / H, roiQuad);
           });
 
           // FPS
@@ -1615,6 +1629,9 @@
             // 1) Omografia: camera (normalizzata) → proiezione (normalizzata)
             var hp = applyHom(detections[i].x / W, detections[i].y / H);
             if (FLIP_X) hp.x = 1 - hp.x;        // specchio orizzontale dell'uscita
+            // aggancia al bordo: chi è appena fuori area rivela comunque sul bordo
+            hp.x = Math.max(0, Math.min(1, hp.x));
+            hp.y = Math.max(0, Math.min(1, hp.y));
             var ex = hp.x * W, ey = hp.y * H;   // posizione in px canvas
 
             // 2) Smoothing (EMA) NELLO STESSO SPAZIO (canvas): lastErasePos è
@@ -1622,8 +1639,8 @@
             //    faceva "saltare" la posizione e rivelare tutta la fascia)
             var prevPos = lastErasePos[label];
             if (prevPos) {
-              ex = prevPos.x + (ex - prevPos.x) * 0.7;   // più reattivo (meno lag)
-              ey = prevPos.y + (ey - prevPos.y) * 0.7;
+              ex = prevPos.x + (ex - prevPos.x) * 0.85;  // più reattivo (meno lag)
+              ey = prevPos.y + (ey - prevPos.y) * 0.85;
             }
             var prevR = smoothedR[label];
             if (prevR) detections[i].r = prevR + (detections[i].r - prevR) * 0.25;
@@ -1744,28 +1761,23 @@
       }
       setInterval(pollState, 16);   // ~60 Hz: meno ritardo sulla proiezione
 
-      // Cambio risoluzione (drag sul proiettore / fullscreen) → ricarica
-      // pulita alla nuova dimensione (debounce). Niente camera/stato da perdere.
-      var projResizeT = null;
-      window.addEventListener('resize', function () {
-        clearTimeout(projResizeT);
-        projResizeT = setTimeout(function () { location.reload(); }, 400);
-      });
-      // Fullscreen toggle locale: F da tastiera, oppure un tocco/clic/OK del
-      // telecomando sulla finestra (sono tutti "gesti utente" validi).
-      function projToggleFs() {
-        if (!document.fullscreenElement) {
-          var el = document.documentElement;
-          (el.requestFullscreen || el.webkitRequestFullscreen || function(){}).call(el);
-        } else {
-          (document.exitFullscreen || document.webkitExitFullscreen || function(){}).call(document);
-        }
+      // NB: niente reload al resize (entrare in fullscreen È un resize → causava
+      // l'uscita immediata). Il canvas riempie il viewport via CSS (width/height
+      // 100vh/vw): le scie sono normalizzate, quindi scalano senza problemi.
+
+      // Entra in fullscreen con un gesto locale (tocco/clic/OK/F). È "solo
+      // entra", così un tocco accidentale non fa USCIRE. Per uscire: tasto Esc
+      // (nativo del browser) o il bottone ⛶ del Mac.
+      function projEnterFs() {
+        if (document.fullscreenElement) return;
+        var el = document.documentElement;
+        try { (el.requestFullscreen || el.webkitRequestFullscreen).call(el); } catch (e) {}
       }
       document.addEventListener('keydown', function (e) {
-        if (e.key === 'f' || e.key === 'F' || e.key === 'Enter') projToggleFs();
+        if (e.key === 'f' || e.key === 'F' || e.key === 'Enter') projEnterFs();
       });
-      document.addEventListener('click', projToggleFs);
-      document.addEventListener('touchend', projToggleFs);
+      document.addEventListener('click', projEnterFs);
+      document.addEventListener('touchend', projEnterFs);
 
       // Comando fullscreen inviato dal Mac: tenta (può essere bloccato dal
       // browser senza un gesto utente; in tal caso usa il tocco/OK qui sopra).
