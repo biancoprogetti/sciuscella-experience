@@ -172,7 +172,7 @@
     <button id="btnCalibrate" title="Cattura lo sfondo: esci dall'inquadratura e premi (B)">🎯 Sfondo</button>
     <button id="btnCalibGeo"  title="Calibra area: trascina i 4 angoli sull'area proiettata nel diag (G)">◳ Area</button>
     <button id="btnCalibReset" title="Rimetti i 4 angoli ai bordi e ricomincia la calibrazione (K)">↺ Angoli</button>
-    <button id="btnFs"        title="Manda a tutto schermo la proiezione (F)">⛶ Schermo</button>
+    <button id="btnFs"        title="Tutto schermo proiezione ON/OFF (F)">⛶ Schermo</button>
   </div>
 
   <!-- ── Visualizzatore diagnostico blob tracking ─────────────────────── -->
@@ -1776,7 +1776,11 @@
           .then(function (m) {
             if (m && m.fsSeq > appliedFs) {
               appliedFs = m.fsSeq;
-              if (!document.fullscreenElement) {
+              // toggle: se è già a schermo intero esce (l'uscita non richiede
+              // un gesto utente), altrimenti tenta di entrare
+              if (document.fullscreenElement) {
+                try { (document.exitFullscreen || document.webkitExitFullscreen).call(document); } catch (e) {}
+              } else {
                 var el = document.documentElement;
                 try { (el.requestFullscreen || el.webkitRequestFullscreen).call(el); } catch (e) {}
               }
