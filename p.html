@@ -168,7 +168,7 @@
     <button id="btnSaveAll" title="Esporta SVG di tutte le persone (S)">↓ SVG</button>
     <button id="btnA4"     title="Genera poster A4 PNG trasparente (A)">↓ A4</button>
     <button id="btnDiag"      title="Visualizzatore blob (D)">📷 Diag</button>
-    <button id="btnMirror"    title="Toggle mirror (spegni per camera dall'alto)">↔ Mirror</button>
+    <button id="btnMirror"    title="Specchia sinistra/destra il punto rivelato (M)">⇄ Specchia</button>
     <button id="btnCalibrate" title="Cattura lo sfondo: esci dall'inquadratura e premi (B)">🎯 Sfondo</button>
     <button id="btnCalibGeo"  title="Calibra area: trascina i 4 angoli sull'area proiettata nel diag (G)">◳ Area</button>
     <button id="btnCalibReset" title="Rimetti i 4 angoli ai bordi e ricomincia la calibrazione (K)">↺ Angoli</button>
@@ -234,6 +234,10 @@
     var calibPts = [{x:0.05,y:0.05},{x:0.95,y:0.05},{x:0.95,y:0.95},{x:0.05,y:0.95}];
     var CALIB_DST = [{x:0,y:0},{x:1,y:0},{x:1,y:1},{x:0,y:1}]; // TL,TR,BR,BL
     var calibDrag = -1;              // indice maniglia in trascinamento (-1 = nessuna)
+    // Specchio orizzontale dell'USCITA: ribalta dx/sx il punto rivelato, dopo
+    // l'omografia. Utile perché la camera dall'alto è speculare alla proiezione.
+    var FLIP_X = false;
+    try { FLIP_X = localStorage.getItem('sciuscella_flipx') === '1'; } catch (e) {}
 
     function computeHomography(src, dst) {
       var A = [], b = [];
@@ -1605,6 +1609,7 @@
 
             // 1) Omografia: camera (normalizzata) → proiezione (normalizzata)
             var hp = applyHom(detections[i].x / W, detections[i].y / H);
+            if (FLIP_X) hp.x = 1 - hp.x;        // specchio orizzontale dell'uscita
             var ex = hp.x * W, ey = hp.y * H;   // posizione in px canvas
 
             // 2) Smoothing (EMA) NELLO STESSO SPAZIO (canvas): lastErasePos è
@@ -2279,14 +2284,15 @@
       } catch (e) { console.error('[cycleCamera]', e); }
     }
 
-    // Mirror toggle — cambia geometria del confronto: ricalibra lo sfondo
+    // Specchio orizzontale dell'uscita (ribalta dx/sx il punto rivelato)
     var btnMirror = document.getElementById('btnMirror');
-    btnMirror.classList.toggle('on', MIRROR_VIDEO);
-    btnMirror.addEventListener('click', function () {
-      MIRROR_VIDEO = !MIRROR_VIDEO;
-      btnMirror.classList.toggle('on', MIRROR_VIDEO);
-      calibrateBackground();
-    });
+    btnMirror.classList.toggle('on', FLIP_X);
+    function toggleFlipX() {
+      FLIP_X = !FLIP_X;
+      btnMirror.classList.toggle('on', FLIP_X);
+      try { localStorage.setItem('sciuscella_flipx', FLIP_X ? '1' : '0'); } catch (e) {}
+    }
+    btnMirror.addEventListener('click', toggleFlipX);
 
     // Calibrazione sfondo manuale
     document.getElementById('btnCalibrate').addEventListener('click', function () {
@@ -2326,6 +2332,7 @@
       if (e.key === 'b' || e.key === 'B') calibrateBackground();
       if (e.key === 'p' || e.key === 'P') openProjection();
       if (e.key === 'v' || e.key === 'V') cycleCamera();
+      if (e.key === 'm' || e.key === 'M') toggleFlipX();
       if (e.key === 'g' || e.key === 'G') { if (calibMode) exitCalibGeo(); else enterCalibGeo(); }
       if (e.key === 'k' || e.key === 'K') resetCalibCorners();
     });
